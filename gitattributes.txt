@@ -219,23 +219,210 @@ if 'filter_applications' not in st.session_state:
 
 @st.cache_resource(show_spinner=False)
 def load_models():
+    """Load models optimized for CPU"""
     embedding = None
     llm = None
     
     if ML_AVAILABLE:
         try:
+            st.info("🔄 Loading embedding model (lightweight, CPU-friendly)...")
             embedding = SentenceTransformer("all-MiniLM-L6-v2")
             st.success("✅ Embedding model loaded - Semantic matching enabled!")
         except Exception as e:
             st.warning(f"⚠️ Could not load embedding model: {e}")
+            st.info("💡 Install with: pip install sentence-transformers")
+    else:
+        st.warning("⚠️ ML libraries not installed. Using deterministic matching only.")
+        st.info("💡 For better matching, install: pip install torch sentence-transformers")
+    
+    # Note: We don't load Phi-3 LLM as it requires 4GB+ RAM and GPU
+    # Instead, we use intelligent rule-based explanations
+    st.info("ℹ️ Using rule-based explanations (fast, CPU-friendly, no GPU needed)")
     
     return embedding, llm
 
 embedding_model, llm_model = load_models()
 
 # ========================================================
-# UTILITY FUNCTIONS
+# RULE-BASED EXPLANATION GENERATOR (CPU-FRIENDLY)
 # ========================================================
+
+def generate_business_explanation_rules(interface_row, sql_row, tables_list):
+    """Generate business explanation using rules (no LLM needed)"""
+    
+    application = safe_get(interface_row, 'application', 'the system')
+    integration = safe_get(interface_row, 'integration', 'this interface')
+    description = safe_get(interface_row, 'description', '')
+    source = safe_get(interface_row, 'source_system', 'source')
+    target = safe_get(interface_row, 'target_system', 'target')
+    queryname = safe_get(sql_row, 'queryname', 'this query')
+    
+    # Start with purpose
+    explanation = f"**Business Purpose:**\n\n"
+    
+    if description:
+        explanation += f"{description}\n\n"
+    else:
+        explanation += f"This interface ({integration}) transfers data from {source} to {target}.\n\n"
+    
+    # Data source
+    explanation += f"**Data Source:**\n\n"
+    explanation += f"The data originates from the {application} application"
+    if tables_list:
+        explanation += f" and retrieves information from {len(tables_list)} database table(s): "
+        explanation += ", ".join(tables_list[:3])
+        if len(tables_list) > 3:
+            explanation += f", and {len(tables_list) - 3} more"
+    explanation += ".\n\n"
+    
+    # Business value
+    explanation += f"**Business Value:**\n\n"
+    
+    # Detect common patterns
+    if any(word in queryname.lower() for word in ['customer', 'client', 'account']):
+        explanation += "This supports customer relationship management and account tracking. "
+    elif any(word in queryname.lower() for word in ['transaction', 'trade', 'payment']):
+        explanation += "This enables transaction processing and financial record-keeping. "
+    elif any(word in queryname.lower() for word in ['position', 'holding', 'portfolio']):
+        explanation += "This provides portfolio management and position tracking. "
+    elif any(word in queryname.lower() for word in ['balance', 'reconciliation', 'settlement']):
+        explanation += "This ensures accurate balance tracking and financial reconciliation. "
+    else:
+        explanation += "This provides critical data integration between systems. "
+    
+    # Frequency
+    if 'daily' in queryname.lower() or 'daily' in description.lower():
+        explanation += "The data is refreshed daily to ensure business users have current information."
+    elif 'real' in queryname.lower() or 'intraday' in description.lower():
+        explanation += "The data is updated in real-time to support immediate business decisions."
+    else:
+        explanation += "The data is synchronized regularly to maintain accuracy across systems."
+    
+    return explanation
+
+def generate_technical_explanation_rules(sql_row, tables_list, analysis):
+    """Generate technical explanation using rules (no LLM needed)"""
+    
+    queryname = safe_get(sql_row, 'queryname', 'Query')
+    sql_file = safe_get(sql_row, 'file', '')
+    system = safe_get(sql_row, 'system', '')
+    complexity = analysis.get('complexity', 'Unknown')
+    
+    explanation = f"**Technical Overview:**\n\n"
+    
+    # Query identification
+    explanation += f"Query Name: `{queryname}`\n"
+    if sql_file:
+        explanation += f"File Location: `{sql_file}`\n"
+    if system:
+        explanation += f"Source System: {system}\n"
+    explanation += f"Complexity: **{complexity}**\n\n"
+    
+    # Data structures
+    explanation += f"**Data Structures:**\n\n"
+    if tables_list:
+        explanation += f"This query accesses {len(tables_list)} table(s):\n"
+        for i, table in enumerate(tables_list[:5], 1):
+            explanation += f"{i}. `{table}`\n"
+        if len(tables_list) > 5:
+            explanation += f"... and {len(tables_list) - 5} more tables\n"
+    
+    # Operations
+    explanation += f"\n**Operations:**\n\n"
+    
+    if len(analysis.get('joins', [])) > 0:
+        explanation += f"- **{len(analysis['joins'])} table join(s)**: "
+        explanation += "Combines data from multiple sources using relational keys.\n"
+    
+    if analysis.get('has_subquery'):
+        explanation += "- **Subqueries**: Uses nested queries for complex data filtering.\n"
+    
+    if analysis.get('has_group_by'):
+        explanation += "- **Aggregation**: Groups and summarizes data for reporting.\n"
+    
+    if analysis.get('where_conditions'):
+        explanation += "- **Filtering**: Applies business rules to select relevant records.\n"
+    
+    # Performance considerations
+    explanation += f"\n**Performance Considerations:**\n\n"
+    
+    if complexity == 'High':
+        explanation += "⚠️ This is a complex query. Ensure proper indexing on join columns. "
+        explanation += "Consider reviewing execution plan for optimization opportunities.\n"
+    elif complexity == 'Medium':
+        explanation += "ℹ️ Moderate complexity. Standard indexing should provide good performance. "
+        explanation += "Monitor execution time during peak loads.\n"
+    else:
+        explanation += "✓ Simple query structure. Should execute efficiently with basic indexing.\n"
+    
+    # Recommendations
+    if len(tables_list) > 5:
+        explanation += "\n💡 **Tip**: With {} tables, verify that all joins are necessary and properly indexed.".format(len(tables_list))
+    
+    return explanation
+
+# ========================================================
+# SQL ANALYSIS (CPU-FRIENDLY)
+# ========================================================
+
+def analyze_sql_query(raw_sql):
+    """Analyze SQL query structure without heavy parsing"""
+    
+    analysis = {
+        'tables': [],
+        'columns': [],
+        'joins': [],
+        'where_conditions': '',
+        'has_subquery': False,
+        'has_union': False,
+        'has_group_by': False,
+        'has_order_by': False,
+        'complexity': 'Low'
+    }
+    
+    if not raw_sql or not isinstance(raw_sql, str):
+        return analysis
+    
+    sql_upper = raw_sql.upper()
+    
+    # Basic pattern extraction (lightweight, no heavy parsing)
+    # Extract tables
+    from_pattern = re.findall(r'FROM\s+([^\s,;()\n]+)', sql_upper, re.IGNORECASE)
+    join_pattern = re.findall(r'JOIN\s+([^\s,;()\n]+)', sql_upper, re.IGNORECASE)
+    
+    tables = list(set(from_pattern + join_pattern))
+    analysis['tables'] = [t.strip() for t in tables if t.strip()]
+    
+    # Detect features
+    analysis['has_subquery'] = '(SELECT' in sql_upper or 'WITH ' in sql_upper[:100]
+    analysis['has_union'] = 'UNION' in sql_upper
+    analysis['has_group_by'] = 'GROUP BY' in sql_upper
+    analysis['has_order_by'] = 'ORDER BY' in sql_upper
+    
+    # Count joins
+    analysis['joins'] = re.findall(r'\bJOIN\b', sql_upper, re.IGNORECASE)
+    
+    # Extract WHERE clause (simplified)
+    where_match = re.search(r'WHERE\s+(.+?)(?:GROUP BY|ORDER BY|LIMIT|$)', sql_upper, re.IGNORECASE | re.DOTALL)
+    if where_match:
+        analysis['where_conditions'] = where_match.group(1)[:200]  # Limit length
+    
+    # Complexity scoring
+    complexity_score = 0
+    complexity_score += len(analysis['tables']) * 2
+    complexity_score += len(analysis['joins']) * 3
+    complexity_score += 10 if analysis['has_subquery'] else 0
+    complexity_score += 5 if analysis['has_group_by'] else 0
+    complexity_score += 5 if analysis['has_union'] else 0
+    
+    if complexity_score < 10:
+        analysis['complexity'] = 'Low'
+    elif complexity_score < 25:
+        analysis['complexity'] = 'Medium'
+    else:
+        analysis['complexity'] = 'High'
+    
+    return analysis
 
 def clean_column_name(col):
     """Clean column names"""
@@ -404,13 +591,14 @@ def calculate_enhanced_match_score(interface_row, sql_row, use_semantic=True):
     
     # 1. APPLICATION MATCHING (30 points)
     if application:
+        app_words = set(application.split())  # Define at the start
+        
         # Application in QueryName (20 points)
         if queryname and (application in queryname or queryname in application):
             score += 20
             details.append(f"✓ Application '{application}' in QueryName")
         elif queryname:
             # Partial word match
-            app_words = set(application.split())
             query_words = set(queryname.split())
             common = app_words & query_words
             if common:
@@ -431,13 +619,14 @@ def calculate_enhanced_match_score(interface_row, sql_row, use_semantic=True):
     
     # 2. INTEGRATION MATCHING (30 points)
     if integration:
+        int_words = set(integration.split())  # Define at the start
+        
         # Integration in QueryName (20 points)
         if queryname and (integration in queryname or queryname in integration):
             score += 20
             details.append(f"✓ Integration '{integration}' in QueryName")
         elif queryname:
             # Word-level matching
-            int_words = set(integration.split())
             query_words = set(queryname.split())
             common = int_words & query_words
             if common:
@@ -866,9 +1055,164 @@ def render_interface_detail():
     else:
         st.info("Generate mapping to see matched queries.")
 
-# ========================================================
-# MAIN APP
-# ========================================================
+def render_sql_detail():
+    """Render SQL detail view with business and technical explanations"""
+    query_name = st.session_state.selected_sql
+    interface = st.session_state.selected_interface
+    
+    col1, col2 = st.columns([6, 1])
+    with col1:
+        st.markdown(f'<div class="breadcrumb">🏠 → ... → 📋 {interface} → 💻 {query_name}</div>', unsafe_allow_html=True)
+    with col2:
+        if st.button("← Back"):
+            navigate_to_interface(interface)
+    
+    st.markdown(f'<h1 style="color: #667eea;">💻 {query_name}</h1>', unsafe_allow_html=True)
+    
+    # Get SQL details
+    sql_df = st.session_state.sql_df
+    if sql_df is None or sql_df.empty:
+        st.error("⚠️ SQL metadata not available")
+        return
+    
+    sql_matches = sql_df[sql_df['queryname'] == query_name]
+    if sql_matches.empty:
+        st.error(f"⚠️ Query '{query_name}' not found")
+        return
+    
+    sql_row = sql_matches.iloc[0]
+    
+    # Get interface details for context
+    int_df = st.session_state.interface_df
+    int_row = int_df[int_df['integration'] == interface].iloc[0] if interface in int_df['integration'].values else None
+    
+    # Extract data
+    raw_sql = safe_get(sql_row, 'rawsql', 'SQL code not available')
+    tables_str = safe_get(sql_row, 'tables', '')
+    
+    # Parse tables
+    if tables_str:
+        tables_list = [t.strip() for t in str(tables_str).split(',')]
+    else:
+        tables_list = []
+    
+    # Analyze SQL
+    analysis = analyze_sql_query(raw_sql)
+    if not analysis['tables'] and tables_list:
+        analysis['tables'] = tables_list
+    
+    # Tabs for different views
+    tab1, tab2, tab3, tab4 = st.tabs(["💻 SQL Code", "📊 Analysis", "🤖 Business Insights", "⚙️ Technical Details"])
+    
+    with tab1:
+        st.subheader("SQL Query Code")
+        st.code(raw_sql, language="sql")
+        
+        st.markdown("---")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write(f"**System:** {safe_get(sql_row, 'system')}")
+            st.write(f"**File:** {safe_get(sql_row, 'file')}")
+        with col2:
+            st.write(f"**Query Name:** {query_name}")
+            st.write(f"**Complexity:** {analysis['complexity']}")
+    
+    with tab2:
+        st.subheader("Query Analysis")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Tables", len(analysis['tables']))
+        with col2:
+            st.metric("Joins", len(analysis['joins']))
+        with col3:
+            st.metric("Subqueries", "Yes" if analysis['has_subquery'] else "No")
+        with col4:
+            st.metric("Complexity", analysis['complexity'])
+        
+        st.markdown("---")
+        
+        if analysis['tables']:
+            st.subheader("📊 Tables Used")
+            for i, table in enumerate(analysis['tables'], 1):
+                st.markdown(f'<span class="column-badge">{i}. {table}</span>', unsafe_allow_html=True)
+        
+        if analysis['has_group_by']:
+            st.info("ℹ️ This query includes aggregation (GROUP BY)")
+        
+        if analysis['has_subquery']:
+            st.info("ℹ️ This query uses subqueries for complex filtering")
+        
+        if len(analysis['joins']) > 3:
+            st.warning(f"⚠️ This query has {len(analysis['joins'])} joins - ensure proper indexing")
+    
+    with tab3:
+        st.subheader("🤖 Business Explanation")
+        
+        st.markdown('<div class="ai-insight">', unsafe_allow_html=True)
+        
+        if int_row is not None:
+            business_exp = generate_business_explanation_rules(int_row, sql_row, analysis['tables'])
+        else:
+            # Fallback if no interface context
+            business_exp = f"""**Business Purpose:**
+
+This query ({query_name}) retrieves data from {len(analysis['tables'])} table(s) in the {safe_get(sql_row, 'system', 'system')}.
+
+**Data Scope:**
+
+The query accesses: {', '.join(analysis['tables'][:5])}
+
+**Complexity:** {analysis['complexity']} - """
+            if analysis['complexity'] == 'High':
+                business_exp += "This is a comprehensive data extraction that combines multiple data sources."
+            elif analysis['complexity'] == 'Medium':
+                business_exp += "This retrieves related data from multiple tables."
+            else:
+                business_exp += "This is a straightforward data extraction."
+        
+        st.markdown(business_exp)
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        st.info("💡 These insights are generated using rule-based analysis (no GPU required)")
+    
+    with tab4:
+        st.subheader("⚙️ Technical Explanation")
+        
+        st.markdown('<div class="ai-insight" style="background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%); border-left-color: #2196f3;">', unsafe_allow_html=True)
+        
+        technical_exp = generate_technical_explanation_rules(sql_row, analysis['tables'], analysis)
+        st.markdown(technical_exp)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Additional technical details
+        st.markdown("---")
+        st.subheader("📋 Query Metadata")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write(f"**System:** {safe_get(sql_row, 'system')}")
+            st.write(f"**File Path:** {safe_get(sql_row, 'file')}")
+            st.write(f"**Query Name:** {query_name}")
+        
+        with col2:
+            st.write(f"**Tables Accessed:** {len(analysis['tables'])}")
+            st.write(f"**Join Operations:** {len(analysis['joins'])}")
+            st.write(f"**Complexity Level:** {analysis['complexity']}")
+        
+        if analysis['has_subquery']:
+            st.write("**Contains Subqueries:** Yes")
+        if analysis['has_group_by']:
+            st.write("**Aggregation:** Yes (GROUP BY)")
+        if analysis['has_union']:
+            st.write("**Union Operations:** Yes")
+        
+        st.info("💡 Technical analysis uses lightweight pattern matching (CPU-optimized)")
+
+
 
 def main():
     st.sidebar.title("🌐 Data Explorer 360°")
@@ -1017,10 +1361,17 @@ def main():
         **SQL Side:** System, File, QueryName, Tables
         
         **Matching Strategy:**
-        - 🎯 **Deterministic (70%)**: Exact matches on systems, names, types
-        - 🤖 **Semantic (30%)**: AI-powered similarity on descriptions and context
+        - 🎯 **Deterministic (80%)**: Exact matches on applications, integrations, descriptions
+        - 🤖 **Semantic (50%)**: AI-powered similarity on descriptions and context
         
         **Result:** More accurate matches with confidence scores!
+        
+        ### 💻 CPU-Optimized
+        
+        - ✅ Lightweight embedding model (500MB RAM)
+        - ✅ Rule-based explanations (no GPU needed)
+        - ✅ Fast pattern-based SQL analysis
+        - ✅ Works great on standard laptops!
         """)
     else:
         if level == 'overview':
@@ -1029,6 +1380,8 @@ def main():
             render_system_pair()
         elif level == 'interface_detail':
             render_interface_detail()
+        elif level == 'sql_detail':
+            render_sql_detail()
 
 if __name__ == "__main__":
     main()
