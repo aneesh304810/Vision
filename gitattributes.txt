@@ -495,8 +495,12 @@ def generate_mapping(interface_df, sql_df, min_score=50):
                     'disposition': safe_get(i_row, 'disposition'),
                     'recommended_approach': safe_get(i_row, 'recommended_approach'),
                     'type': safe_get(i_row, 'type'),
+                    'data_set': safe_get(i_row, 'data_set'),
                     'queryname': safe_get(s_row, 'queryname'),
                     'tables': safe_get(s_row, 'tables'),
+                    'selectcolumns': safe_get(s_row, 'selectcolumns'),
+                    'system': safe_get(s_row, 'system'),
+                    'file': safe_get(s_row, 'file'),
                     'final_score': score,
                     'confidence': confidence
                 })
@@ -504,7 +508,18 @@ def generate_mapping(interface_df, sql_df, min_score=50):
     progress.empty()
     status.empty()
     
-    return pd.DataFrame(results)
+    df = pd.DataFrame(results)
+    
+    # Ensure all required columns exist
+    if df.empty:
+        df = pd.DataFrame(columns=[
+            'source_system', 'target_system', 'integration', 'description',
+            'disposition', 'recommended_approach', 'type', 'data_set',
+            'queryname', 'tables', 'selectcolumns', 'system', 'file',
+            'final_score', 'confidence'
+        ])
+    
+    return df
 
 # ========================================================
 # LLM EXPLANATIONS
@@ -742,10 +757,15 @@ def render_interface_detail():
     st.markdown("---")
     
     # Find matching SQL
-    if st.session_state.mapping_df is not None:
-        matched_sql = st.session_state.mapping_df[
-            st.session_state.mapping_df['integration'] == interface
-        ]
+    if st.session_state.mapping_df is not None and not st.session_state.mapping_df.empty:
+        # Check if integration column exists
+        if 'integration' in st.session_state.mapping_df.columns:
+            matched_sql = st.session_state.mapping_df[
+                st.session_state.mapping_df['integration'] == interface
+            ]
+        else:
+            st.error("⚠️ Mapping data is missing the 'integration' column. Please regenerate the mapping.")
+            matched_sql = pd.DataFrame()
         
         if not matched_sql.empty:
             st.subheader("💻 Matching SQL Queries")
@@ -796,7 +816,22 @@ def render_sql_detail():
     
     # Get SQL details
     sql_df = st.session_state.sql_df
-    sql_row = sql_df[sql_df['queryname'] == query_name].iloc[0]
+    
+    if sql_df is None or sql_df.empty:
+        st.error("⚠️ SQL metadata not loaded. Please upload SQL metadata file.")
+        return
+    
+    if 'queryname' not in sql_df.columns:
+        st.error("⚠️ SQL metadata is missing the 'queryname' column.")
+        return
+    
+    sql_matches = sql_df[sql_df['queryname'] == query_name]
+    
+    if sql_matches.empty:
+        st.error(f"⚠️ Query '{query_name}' not found in SQL metadata.")
+        return
+    
+    sql_row = sql_matches.iloc[0]
     
     raw_sql = safe_get(sql_row, 'rawsql')
     tables = safe_get(sql_row, 'tables')
@@ -902,6 +937,14 @@ def main():
                 st.session_state.sql_df = load_sql_metadata(sql_file)
             st.success(f"✅ Loaded {len(st.session_state.sql_df)} queries")
         
+        # Load existing mapping if available
+        if os.path.exists(MAPPING_FILE) and st.session_state.mapping_df is None:
+            try:
+                st.session_state.mapping_df = pd.read_excel(MAPPING_FILE)
+                st.info(f"📄 Loaded existing mapping ({len(st.session_state.mapping_df)} records)")
+            except:
+                pass
+        
         if st.session_state.interface_df is not None and st.session_state.sql_df is not None:
             if st.button("🔗 Generate Mapping", use_container_width=True):
                 with st.spinner("Generating interface-SQL mapping..."):
@@ -909,7 +952,18 @@ def main():
                         st.session_state.interface_df,
                         st.session_state.sql_df
                     )
-                st.success(f"✅ Generated {len(st.session_state.mapping_df)} mappings")
+                    
+                    # Save to Excel file
+                    if not st.session_state.mapping_df.empty:
+                        try:
+                            st.session_state.mapping_df.to_excel(MAPPING_FILE, index=False)
+                            st.success(f"✅ Generated {len(st.session_state.mapping_df)} mappings")
+                            st.info(f"📄 Saved to: {os.path.abspath(MAPPING_FILE)}")
+                        except Exception as e:
+                            st.success(f"✅ Generated {len(st.session_state.mapping_df)} mappings")
+                            st.warning(f"⚠️ Could not save to file: {e}")
+                    else:
+                        st.warning("⚠️ No mappings found. Try lowering the minimum score.")
                 st.rerun()
     
     # GLOBAL FILTERS SECTION
@@ -1044,3 +1098,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
