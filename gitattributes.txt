@@ -1,3 +1,4 @@
+
 """
 ========================================================
 Enterprise Data Explorer 360° - Enhanced Semantic Matching
@@ -728,7 +729,7 @@ def calculate_enhanced_match_score(interface_row, sql_row, use_semantic=True):
     return final_score, details, semantic_score
 
 def generate_enhanced_mapping(interface_df, sql_df, min_score=45, use_semantic=True):
-    """Generate enhanced semantic mapping"""
+    """Generate enhanced semantic mapping with optimized batch processing"""
     
     results = []
     
@@ -738,20 +739,107 @@ def generate_enhanced_mapping(interface_df, sql_df, min_score=45, use_semantic=T
     st.write(f"   Semantic Matching: {'✅ Enabled' if use_semantic and embedding_model else '❌ Disabled'}")
     st.write(f"   Minimum Score: {min_score}")
     
+    # ========================================================
+    # OPTIMIZATION: Pre-compute all embeddings in batch
+    # ========================================================
+    
+    interface_embeddings = None
+    sql_embeddings = None
+    
+    if use_semantic and embedding_model:
+        st.write("🚀 Optimizing: Pre-computing embeddings in batches...")
+        
+        try:
+            # Build interface texts (batch)
+            interface_texts = []
+            for _, row in interface_df.iterrows():
+                application = safe_get(row, 'application', '')
+                integration = safe_get(row, 'integration', '')
+                description = safe_get(row, 'description', '')
+                text = f"{application} {integration} {description}".strip()
+                interface_texts.append(text if text else "unknown")
+            
+            # Build SQL texts (batch)
+            sql_texts = []
+            for _, row in sql_df.iterrows():
+                queryname = safe_get(row, 'queryname', '')
+                sql_file = safe_get(row, 'file', '')
+                text = f"{queryname} {sql_file}".strip()
+                sql_texts.append(text if text else "unknown")
+            
+            # Compute ALL embeddings at once (MUCH faster)
+            st.write(f"   Computing {len(interface_texts)} interface embeddings...")
+            interface_embeddings = embedding_model.encode(
+                interface_texts, 
+                batch_size=32,
+                show_progress_bar=False,
+                convert_to_numpy=True  # Use numpy for faster comparison
+            )
+            
+            st.write(f"   Computing {len(sql_texts)} SQL embeddings...")
+            sql_embeddings = embedding_model.encode(
+                sql_texts,
+                batch_size=32, 
+                show_progress_bar=False,
+                convert_to_numpy=True
+            )
+            
+            st.success("✅ Embeddings pre-computed! Matching will be MUCH faster now.")
+            
+        except Exception as e:
+            st.warning(f"⚠️ Could not pre-compute embeddings: {e}")
+            st.info("Falling back to deterministic matching only")
+            use_semantic = False
+    
+    # ========================================================
+    # MATCHING WITH PRE-COMPUTED EMBEDDINGS
+    # ========================================================
+    
     progress = st.progress(0)
     status = st.empty()
     
     total = len(interface_df)
     matched_count = 0
     
-    for idx, (_, i_row) in enumerate(interface_df.iterrows()):
+    for idx, (i_idx, i_row) in enumerate(interface_df.iterrows()):
         progress.progress((idx + 1) / total)
-        status.text(f"Processing interface {idx + 1} of {total}... (Found {matched_count} matches so far)")
         
-        for _, s_row in sql_df.iterrows():
-            final_score, match_details, semantic_score = calculate_enhanced_match_score(
-                i_row, s_row, use_semantic=use_semantic
+        if idx % 50 == 0:  # Update status every 50 interfaces
+            status.text(f"Processing interface {idx + 1} of {total}... (Found {matched_count} matches)")
+        
+        for s_idx, s_row in sql_df.iterrows():
+            # Calculate deterministic score (fast)
+            final_score, match_details, _ = calculate_enhanced_match_score_fast(
+                i_row, s_row, use_semantic=False
             )
+            
+            # Add semantic score if enabled (now MUCH faster)
+            semantic_score = 0
+            if use_semantic and interface_embeddings is not None:
+                try:
+                    # Use pre-computed embeddings (just dot product, super fast!)
+                    similarity = np.dot(interface_embeddings[idx], sql_embeddings[s_idx])
+                    
+                    # Score based on similarity
+                    if similarity >= 0.85:
+                        semantic_score = 50
+                        match_details.append(f"🤖 Excellent semantic match ({similarity:.2f})")
+                    elif similarity >= 0.75:
+                        semantic_score = 40
+                        match_details.append(f"🤖 Very high semantic match ({similarity:.2f})")
+                    elif similarity >= 0.65:
+                        semantic_score = 30
+                        match_details.append(f"🤖 High semantic match ({similarity:.2f})")
+                    elif similarity >= 0.55:
+                        semantic_score = 20
+                        match_details.append(f"🤖 Good semantic match ({similarity:.2f})")
+                    elif similarity >= 0.45:
+                        semantic_score = 10
+                        match_details.append(f"🤖 Moderate semantic match ({similarity:.2f})")
+                except:
+                    pass
+            
+            final_score = min(final_score + semantic_score, 100)
             
             if final_score >= min_score:
                 matched_count += 1
@@ -802,6 +890,114 @@ def generate_enhanced_mapping(interface_df, sql_df, min_score=45, use_semantic=T
         ])
     
     return df
+
+def calculate_enhanced_match_score_fast(interface_row, sql_row, use_semantic=False):
+    """
+    Fast version - only deterministic matching
+    Semantic matching done separately with pre-computed embeddings
+    """
+    
+    score = 0
+    details = []
+    
+    # Extract key fields
+    application = normalize_text(safe_get(interface_row, 'application'))
+    integration = normalize_text(safe_get(interface_row, 'integration'))
+    description = normalize_text(safe_get(interface_row, 'description'))
+    
+    queryname = normalize_text(safe_get(sql_row, 'queryname'))
+    sql_file = normalize_text(safe_get(sql_row, 'file'))
+    
+    # === PRIMARY MATCHING (80 points) ===
+    
+    # 1. APPLICATION MATCHING (30 points)
+    if application:
+        app_words = set(application.split())
+        
+        if queryname and (application in queryname or queryname in application):
+            score += 20
+            details.append(f"✓ Application '{application}' in QueryName")
+        elif queryname:
+            query_words = set(queryname.split())
+            common = app_words & query_words
+            if common:
+                score += min(len(common) * 5, 15)
+                details.append(f"✓ Application words in QueryName ({len(common)})")
+        
+        if sql_file and (application in sql_file or sql_file in application):
+            score += 10
+            details.append(f"✓ Application '{application}' in File")
+        elif sql_file:
+            file_words = set(sql_file.split())
+            common = app_words & file_words
+            if common:
+                score += min(len(common) * 3, 8)
+                details.append(f"✓ Application words in File ({len(common)})")
+    
+    # 2. INTEGRATION MATCHING (30 points)
+    if integration:
+        int_words = set(integration.split())
+        
+        if queryname and (integration in queryname or queryname in integration):
+            score += 20
+            details.append(f"✓ Integration '{integration}' in QueryName")
+        elif queryname:
+            query_words = set(queryname.split())
+            common = int_words & query_words
+            if common:
+                score += min(len(common) * 5, 15)
+                details.append(f"✓ Integration words in QueryName ({len(common)})")
+        
+        if sql_file and (integration in sql_file or sql_file in integration):
+            score += 10
+            details.append(f"✓ Integration '{integration}' in File")
+        elif sql_file:
+            file_words = set(sql_file.split())
+            common = int_words & file_words
+            if common:
+                score += min(len(common) * 3, 8)
+                details.append(f"✓ Integration words in File ({len(common)})")
+    
+    # 3. DESCRIPTION MATCHING (20 points)
+    if description:
+        desc_words = set(description.split())
+        
+        if queryname:
+            query_words = set(queryname.split())
+            common = desc_words & query_words
+            if common:
+                score += min(len(common) * 2, 10)
+                details.append(f"✓ Description words in QueryName ({len(common)})")
+        
+        if sql_file:
+            file_words = set(sql_file.split())
+            common = desc_words & file_words
+            if common:
+                score += min(len(common) * 2, 10)
+                details.append(f"✓ Description words in File ({len(common)})")
+    
+    # === SECONDARY MATCHING (20 points) ===
+    
+    # 4. System Matching (15 points)
+    source_sys = normalize_text(safe_get(interface_row, 'source_system'))
+    sql_sys = normalize_text(safe_get(sql_row, 'system'))
+    
+    if source_sys and sql_sys:
+        if source_sys == sql_sys:
+            score += 15
+            details.append(f"✓ System match: {source_sys}")
+        elif source_sys in sql_sys or sql_sys in source_sys:
+            score += 10
+            details.append(f"✓ Partial system match")
+    
+    # 5. Type/Format Hints (5 points)
+    int_type = normalize_text(safe_get(interface_row, 'type'))
+    if int_type and 'sql' in int_type:
+        if (sql_file and 'sql' in sql_file) or (queryname and 'query' in queryname):
+            score += 5
+            details.append(f"✓ Type indicator: SQL")
+    
+    return score, details, 0  # semantic_score returned as 0 (calculated separately)
 
 # ========================================================
 # FILTERING
