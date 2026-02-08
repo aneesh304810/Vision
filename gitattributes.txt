@@ -1,33 +1,1046 @@
-*.7z filter=lfs diff=lfs merge=lfs -text
-*.arrow filter=lfs diff=lfs merge=lfs -text
-*.bin filter=lfs diff=lfs merge=lfs -text
-*.bz2 filter=lfs diff=lfs merge=lfs -text
-*.ftz filter=lfs diff=lfs merge=lfs -text
-*.gz filter=lfs diff=lfs merge=lfs -text
-*.h5 filter=lfs diff=lfs merge=lfs -text
-*.joblib filter=lfs diff=lfs merge=lfs -text
-*.lfs.* filter=lfs diff=lfs merge=lfs -text
-*.mlmodel filter=lfs diff=lfs merge=lfs -text
-*.model filter=lfs diff=lfs merge=lfs -text
-*.msgpack filter=lfs diff=lfs merge=lfs -text
-*.npy filter=lfs diff=lfs merge=lfs -text
-*.npz filter=lfs diff=lfs merge=lfs -text
-*.onnx filter=lfs diff=lfs merge=lfs -text
-*.ot filter=lfs diff=lfs merge=lfs -text
-*.parquet filter=lfs diff=lfs merge=lfs -text
-*.pb filter=lfs diff=lfs merge=lfs -text
-*.pickle filter=lfs diff=lfs merge=lfs -text
-*.pkl filter=lfs diff=lfs merge=lfs -text
-*.pt filter=lfs diff=lfs merge=lfs -text
-*.pth filter=lfs diff=lfs merge=lfs -text
-*.rar filter=lfs diff=lfs merge=lfs -text
-saved_model/**/* filter=lfs diff=lfs merge=lfs -text
-*.tar.* filter=lfs diff=lfs merge=lfs -text
-*.tflite filter=lfs diff=lfs merge=lfs -text
-*.tgz filter=lfs diff=lfs merge=lfs -text
-*.wasm filter=lfs diff=lfs merge=lfs -text
-*.xz filter=lfs diff=lfs merge=lfs -text
-*.zip filter=lfs diff=lfs merge=lfs -text
-*.zst filter=lfs diff=lfs merge=lfs -text
-*tfevents* filter=lfs diff=lfs merge=lfs -text
-model.safetensors filter=lfs diff=lfs merge=lfs -text
+"""
+========================================================
+Enterprise Data Explorer 360° - Pro Edition
+WITH GLOBAL FILTERS
+========================================================
+"""
+
+import streamlit as st
+import pandas as pd
+import json
+import re
+import os
+from collections import defaultdict
+import numpy as np
+
+# ML/NLP
+try:
+    import torch
+    from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+    from sentence_transformers import SentenceTransformer, util
+    ML_AVAILABLE = True
+except:
+    ML_AVAILABLE = False
+
+# SQL Parsing
+try:
+    import sqlglot
+    from sqlglot.expressions import Table, Column, Join
+    SQLGLOT_AVAILABLE = True
+except:
+    SQLGLOT_AVAILABLE = False
+
+# Visualization  
+try:
+    from streamlit_agraph import agraph, Node, Edge, Config
+    AGRAPH_AVAILABLE = True
+except:
+    AGRAPH_AVAILABLE = False
+
+try:
+    from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
+    AGGRID_AVAILABLE = True
+except:
+    AGGRID_AVAILABLE = False
+
+# Configuration
+st.set_page_config(
+    page_title="Data Explorer 360° Pro",
+    page_icon="🌐",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+if ML_AVAILABLE:
+    torch.set_num_threads(8)
+
+MAPPING_FILE = "interface_sql_mapping.xlsx"
+
+# ========================================================
+# PREMIUM STYLING
+# ========================================================
+
+st.markdown("""
+<style>
+    .premium-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+        padding: 2rem;
+        border-radius: 15px;
+        text-align: center;
+        margin-bottom: 2rem;
+        box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
+    }
+    
+    .premium-title {
+        font-size: 3.5rem;
+        font-weight: 800;
+        color: white;
+        margin: 0;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+    }
+    
+    .breadcrumb {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1.5rem 2rem;
+        border-radius: 12px;
+        margin-bottom: 2rem;
+        color: white;
+        font-size: 1.1rem;
+    }
+    
+    .metric-card {
+        background: white;
+        padding: 2rem;
+        border-radius: 15px;
+        box-shadow: 0 5px 20px rgba(0,0,0,0.08);
+        text-align: center;
+        transition: all 0.3s ease;
+        border-top: 4px solid #667eea;
+    }
+    
+    .metric-card:hover {
+        transform: translateY(-8px);
+        box-shadow: 0 10px 30px rgba(102, 126, 234, 0.2);
+    }
+    
+    .metric-value {
+        font-size: 3rem;
+        font-weight: 800;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+    
+    .interactive-card {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 12px;
+        border-left: 5px solid #667eea;
+        margin: 1rem 0;
+        box-shadow: 0 3px 15px rgba(0,0,0,0.08);
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+    
+    .interactive-card:hover {
+        transform: translateX(10px);
+        box-shadow: 0 5px 25px rgba(102, 126, 234, 0.15);
+    }
+    
+    .ai-insight {
+        background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
+        border-radius: 12px;
+        padding: 2rem;
+        margin: 2rem 0;
+        border-left: 6px solid #ff6b6b;
+    }
+    
+    .confidence-high {
+        background: #e8f5e9;
+        color: #2e7d32;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        font-weight: 700;
+    }
+    
+    .confidence-medium {
+        background: #fff3e0;
+        color: #ef6c00;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        font-weight: 700;
+    }
+    
+    .confidence-low {
+        background: #fce4ec;
+        color: #c2185b;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        font-weight: 700;
+    }
+    
+    .column-badge {
+        display: inline-block;
+        background: #e3f2fd;
+        color: #1976d2;
+        padding: 0.4rem 1rem;
+        border-radius: 15px;
+        margin: 0.3rem;
+        font-size: 0.9rem;
+    }
+    
+    .table-badge {
+        display: inline-block;
+        background: #f3e5f5;
+        color: #7b1fa2;
+        padding: 0.4rem 1rem;
+        border-radius: 15px;
+        margin: 0.3rem;
+        font-size: 0.9rem;
+    }
+    
+    .filter-badge {
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        font-weight: 700;
+        display: inline-block;
+        margin: 0.3rem;
+    }
+    
+    .active-filter-panel {
+        background: #fff3e0;
+        border-left: 4px solid #ff9800;
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 1rem 0;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ========================================================
+# SESSION STATE WITH GLOBAL FILTERS
+# ========================================================
+
+if 'navigation_level' not in st.session_state:
+    st.session_state.navigation_level = 'overview'
+if 'selected_source' not in st.session_state:
+    st.session_state.selected_source = None
+if 'selected_target' not in st.session_state:
+    st.session_state.selected_target = None  
+if 'selected_interface' not in st.session_state:
+    st.session_state.selected_interface = None
+if 'selected_sql' not in st.session_state:
+    st.session_state.selected_sql = None
+
+# Data
+if 'interface_df' not in st.session_state:
+    st.session_state.interface_df = None
+if 'sql_df' not in st.session_state:
+    st.session_state.sql_df = None
+if 'mapping_df' not in st.session_state:
+    st.session_state.mapping_df = None
+
+# GLOBAL FILTERS
+if 'filter_source_systems' not in st.session_state:
+    st.session_state.filter_source_systems = []
+if 'filter_target_systems' not in st.session_state:
+    st.session_state.filter_target_systems = []
+if 'filter_types' not in st.session_state:
+    st.session_state.filter_types = []
+if 'filter_dispositions' not in st.session_state:
+    st.session_state.filter_dispositions = []
+if 'filter_approaches' not in st.session_state:
+    st.session_state.filter_approaches = []
+
+# ========================================================
+# LOAD MODELS
+# ========================================================
+
+@st.cache_resource(show_spinner=False)
+def load_models():
+    embedding = None
+    llm = None
+    
+    if ML_AVAILABLE:
+        try:
+            embedding = SentenceTransformer("all-MiniLM-L6-v2")
+        except:
+            pass
+        
+        try:
+            tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-4k-instruct")
+            model = AutoModelForCausalLM.from_pretrained(
+                "microsoft/Phi-3-mini-4k-instruct",
+                device_map="cpu",
+                torch_dtype=torch.float16
+            )
+            llm = pipeline("text-generation", model=model, tokenizer=tokenizer,
+                          max_new_tokens=600, temperature=0.3)
+        except:
+            pass
+    
+    return embedding, llm
+
+embedding_model, llm_model = load_models()
+
+# ========================================================
+# UTILITY FUNCTIONS
+# ========================================================
+
+def clean_column_name(col):
+    return str(col).strip().lower().replace(" ", "_").replace("/", "_").replace("-", "_").strip("_")
+
+def safe_get(row, column, default=""):
+    try:
+        val = row.get(column, default) if isinstance(row, dict) else getattr(row, column, default)
+        return val if pd.notna(val) and str(val) != 'nan' else default
+    except:
+        return default
+
+def normalize_text(text):
+    if not isinstance(text, str):
+        return ""
+    return text.lower().replace("_", "").replace(" ", "").replace("-", "").strip()
+
+# ========================================================
+# FILTERING FUNCTION
+# ========================================================
+
+def apply_global_filters(df):
+    """Apply global filters to dataframe"""
+    if df is None or df.empty:
+        return df
+    
+    filtered = df.copy()
+    
+    # Source system filter
+    if st.session_state.filter_source_systems:
+        filtered = filtered[filtered['source_system'].isin(st.session_state.filter_source_systems)]
+    
+    # Target system filter
+    if st.session_state.filter_target_systems:
+        filtered = filtered[filtered['target_system'].isin(st.session_state.filter_target_systems)]
+    
+    # Type filter
+    if st.session_state.filter_types and 'type' in filtered.columns:
+        filtered = filtered[filtered['type'].isin(st.session_state.filter_types)]
+    
+    # Disposition filter
+    if st.session_state.filter_dispositions and 'disposition' in filtered.columns:
+        filtered = filtered[filtered['disposition'].isin(st.session_state.filter_dispositions)]
+    
+    # Approach filter
+    if st.session_state.filter_approaches and 'recommended_approach' in filtered.columns:
+        filtered = filtered[filtered['recommended_approach'].isin(st.session_state.filter_approaches)]
+    
+    return filtered
+
+def get_active_filter_count():
+    """Count active filters"""
+    count = 0
+    count += len(st.session_state.filter_source_systems)
+    count += len(st.session_state.filter_target_systems)
+    count += len(st.session_state.filter_types)
+    count += len(st.session_state.filter_dispositions)
+    count += len(st.session_state.filter_approaches)
+    return count
+
+def clear_all_filters():
+    """Clear all global filters"""
+    st.session_state.filter_source_systems = []
+    st.session_state.filter_target_systems = []
+    st.session_state.filter_types = []
+    st.session_state.filter_dispositions = []
+    st.session_state.filter_approaches = []
+
+# ========================================================
+# DATA LOADING
+# ========================================================
+
+def load_interface_inventory(file):
+    for sheet in ["interface", "Interface", "Systems and Interfaces", "Sheet1"]:
+        try:
+            df = pd.read_excel(file, sheet_name=sheet)
+            break
+        except:
+            continue
+    else:
+        df = pd.read_excel(file)
+    
+    df.columns = [clean_column_name(col) for col in df.columns]
+    df = df.dropna(axis=1, how='all')
+    df = df.loc[:, ~df.columns.str.contains("^unnamed", case=False)]
+    
+    mappings = {
+        'source_system': ['vendor_system_name', 'vendor', 'system', 'source_system'],
+        'target_system': ['target', 'target_system'],
+        'integration': ['integration', 'interface', 'vendor_system_name'],
+        'description': ['description', 'desc', 'purpose'],
+        'disposition': ['disposition', 'disp', 'disposition_on_swp'],
+        'recommended_approach': ['recommended_approach', 'approach'],
+        'type': ['type', 'interface_type', 'file_format_type_source'],
+        'data_set': ['data_set', 'dataset']
+    }
+    
+    for std, vars in mappings.items():
+        for v in vars:
+            if v in df.columns and std not in df.columns:
+                df[std] = df[v]
+                break
+    
+    if 'source_system' not in df.columns:
+        df['source_system'] = df.get('integration', 'Unknown')
+    if 'target_system' not in df.columns:
+        df['target_system'] = 'AddVantage'
+    if 'integration' not in df.columns:
+        df['integration'] = df['source_system'] + '_Interface'
+    
+    for col in df.select_dtypes(include=['object']).columns:
+        df[col] = df[col].astype(str).str.strip().replace({'nan': '', 'None': ''})
+    
+    return df
+
+def load_sql_metadata(file):
+    for sheet in ["Queries", "Sheet1", "SQL"]:
+        try:
+            df = pd.read_excel(file, sheet_name=sheet)
+            break
+        except:
+            continue
+    else:
+        df = pd.read_excel(file)
+    
+    df.columns = [clean_column_name(col) for col in df.columns]
+    
+    mappings = {
+        'system': ['system', 'source_system'],
+        'file': ['file', 'filename'],
+        'queryname': ['queryname', 'query_name', 'query'],
+        'tables': ['tables', 'table'],
+        'selectcolumns': ['selectcolumns', 'select_columns', 'columns'],
+        'rawsql': ['rawsql', 'raw_sql', 'sql']
+    }
+    
+    for std, vars in mappings.items():
+        for v in vars:
+            if v in df.columns and std not in df.columns:
+                df[std] = df[v]
+                break
+    
+    if 'system' not in df.columns:
+        df['system'] = 'Unknown'
+    
+    for col in df.select_dtypes(include=['object']).columns:
+        df[col] = df[col].astype(str).str.strip().replace({'nan': '', 'None': ''})
+    
+    return df
+
+# ========================================================
+# SQL ANALYSIS
+# ========================================================
+
+def analyze_sql(raw_sql):
+    analysis = {'tables': [], 'columns': [], 'joins': [], 'complexity': 'Low'}
+    
+    if not raw_sql:
+        return analysis
+    
+    sql_upper = raw_sql.upper()
+    
+    if SQLGLOT_AVAILABLE:
+        try:
+            tree = sqlglot.parse_one(raw_sql, read="oracle")
+            analysis['tables'] = list(set([t.sql() for t in tree.find_all(Table)]))
+            analysis['columns'] = list(set([c.sql() for c in tree.find_all(Column)]))
+            analysis['joins'] = [j.sql() for j in tree.find_all(Join)]
+        except:
+            pass
+    
+    if not analysis['tables']:
+        tables = re.findall(r'FROM\s+([^\s,;(]+)|JOIN\s+([^\s,;(]+)', sql_upper)
+        analysis['tables'] = [t[0] if t[0] else t[1] for t in tables]
+    
+    score = len(analysis['tables']) * 2 + len(analysis['joins']) * 3
+    analysis['complexity'] = 'Low' if score < 10 else 'Medium' if score < 25 else 'High'
+    
+    return analysis
+
+# ========================================================
+# MATCHING ENGINE
+# ========================================================
+
+def calculate_match_score(interface_row, sql_row):
+    score = 0
+    
+    source = normalize_text(safe_get(interface_row, 'source_system'))
+    sql_sys = normalize_text(safe_get(sql_row, 'system'))
+    
+    if source and sql_sys and source in sql_sys:
+        score += 40
+    
+    integration = normalize_text(safe_get(interface_row, 'integration'))
+    queryname = normalize_text(safe_get(sql_row, 'queryname'))
+    
+    if integration and queryname:
+        if integration in queryname or queryname in integration:
+            score += 30
+    
+    return min(score, 100)
+
+def generate_mapping(interface_df, sql_df, min_score=50):
+    results = []
+    
+    progress = st.progress(0)
+    status = st.empty()
+    
+    total = len(interface_df)
+    
+    for idx, (_, i_row) in enumerate(interface_df.iterrows()):
+        progress.progress((idx + 1) / total)
+        status.text(f"Mapping interface {idx + 1} of {total}...")
+        
+        for _, s_row in sql_df.iterrows():
+            score = calculate_match_score(i_row, s_row)
+            
+            if score >= min_score:
+                confidence = "High" if score >= 85 else "Medium" if score >= 70 else "Low"
+                
+                results.append({
+                    'source_system': safe_get(i_row, 'source_system'),
+                    'target_system': safe_get(i_row, 'target_system'),
+                    'integration': safe_get(i_row, 'integration'),
+                    'description': safe_get(i_row, 'description'),
+                    'disposition': safe_get(i_row, 'disposition'),
+                    'recommended_approach': safe_get(i_row, 'recommended_approach'),
+                    'type': safe_get(i_row, 'type'),
+                    'queryname': safe_get(s_row, 'queryname'),
+                    'tables': safe_get(s_row, 'tables'),
+                    'final_score': score,
+                    'confidence': confidence
+                })
+    
+    progress.empty()
+    status.empty()
+    
+    return pd.DataFrame(results)
+
+# ========================================================
+# LLM EXPLANATIONS
+# ========================================================
+
+def generate_business_explanation(tables, columns):
+    if not llm_model:
+        return f"This query accesses {len(tables)} tables and retrieves {len(columns) if isinstance(columns, list) else 'multiple'} columns. Install LLM for detailed explanations."
+    
+    prompt = f"""Explain in business terms what this SQL query does:
+Tables: {', '.join(tables[:3])}
+Columns: {len(columns) if isinstance(columns, list) else 'Multiple'}
+
+Provide a clear 2-3 sentence business explanation."""
+    
+    try:
+        response = llm_model(prompt, max_new_tokens=300)
+        return response[0]['generated_text'].split('\n\n')[-1]
+    except:
+        return "Unable to generate explanation."
+
+def generate_technical_explanation(tables, joins):
+    if not llm_model:
+        return f"Technical: {len(tables)} tables, {len(joins)} joins. Install LLM for detailed analysis."
+    
+    prompt = f"""Provide technical analysis:
+Tables: {', '.join(tables[:3])}
+Joins: {len(joins)}
+
+Give concise technical explanation."""
+    
+    try:
+        response = llm_model(prompt, max_new_tokens=300)
+        return response[0]['generated_text'].split('\n\n')[-1]
+    except:
+        return "Unable to generate explanation."
+
+# ========================================================
+# NAVIGATION
+# ========================================================
+
+def navigate_to_overview():
+    st.session_state.navigation_level = 'overview'
+    st.session_state.selected_source = None
+    st.session_state.selected_target = None
+    st.session_state.selected_interface = None
+    st.rerun()
+
+def navigate_to_system_pair(source, target):
+    st.session_state.navigation_level = 'system_pair'
+    st.session_state.selected_source = source
+    st.session_state.selected_target = target
+    st.session_state.selected_interface = None
+    st.rerun()
+
+def navigate_to_interface(interface_name):
+    st.session_state.navigation_level = 'interface_detail'
+    st.session_state.selected_interface = interface_name
+    st.rerun()
+
+def navigate_to_sql_detail(query_name):
+    st.session_state.navigation_level = 'sql_detail'
+    st.session_state.selected_sql = query_name
+    st.rerun()
+
+# ========================================================
+# VIEW: OVERVIEW (Level 1)
+# ========================================================
+
+def render_overview():
+    st.markdown('<div class="premium-header"><h1 class="premium-title">🌐 Data Explorer 360°</h1><p class="premium-subtitle">Complete visibility into your data ecosystem</p></div>', unsafe_allow_html=True)
+    
+    # Apply global filters
+    df = apply_global_filters(st.session_state.interface_df)
+    
+    # Show active filters
+    active_filters = get_active_filter_count()
+    if active_filters > 0:
+        st.markdown(f'<div class="active-filter-panel">🔍 <strong>{active_filters} Active Filter(s)</strong> - Results are filtered. Use sidebar to adjust.</div>', unsafe_allow_html=True)
+    
+    # Metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.markdown(f'<div class="metric-card"><div class="metric-value">{len(df)}</div><div class="metric-label">Interfaces (Filtered)</div></div>', unsafe_allow_html=True)
+    
+    with col2:
+        systems = df['source_system'].nunique()
+        st.markdown(f'<div class="metric-card"><div class="metric-value">{systems}</div><div class="metric-label">Source Systems</div></div>', unsafe_allow_html=True)
+    
+    with col3:
+        if st.session_state.sql_df is not None:
+            sql_count = len(st.session_state.sql_df)
+        else:
+            sql_count = 0
+        st.markdown(f'<div class="metric-card"><div class="metric-value">{sql_count}</div><div class="metric-label">SQL Queries</div></div>', unsafe_allow_html=True)
+    
+    with col4:
+        if st.session_state.mapping_df is not None:
+            mapping_filtered = apply_global_filters(st.session_state.mapping_df)
+            mapped = len(mapping_filtered)
+        else:
+            mapped = 0
+        st.markdown(f'<div class="metric-card"><div class="metric-value">{mapped}</div><div class="metric-label">Mappings (Filtered)</div></div>', unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # System pairs
+    st.subheader("🔗 System Connections")
+    
+    if df.empty:
+        st.warning("⚠️ No data matches current filters. Try adjusting filters in the sidebar.")
+        return
+    
+    st.write("Click on any system pair to drill down into interfaces")
+    
+    system_pairs = df.groupby(['source_system', 'target_system']).size().reset_index(name='count')
+    system_pairs = system_pairs.sort_values('count', ascending=False)
+    
+    for _, row in system_pairs.iterrows():
+        source = row['source_system']
+        target = row['target_system']
+        count = row['count']
+        
+        col1, col2 = st.columns([4, 1])
+        
+        with col1:
+            st.markdown(f'<div class="interactive-card"><div class="card-title">{source} → {target}</div><div class="card-subtitle">{count} interfaces</div></div>', unsafe_allow_html=True)
+        
+        with col2:
+            if st.button("Drill Down →", key=f"drill_{source}_{target}"):
+                navigate_to_system_pair(source, target)
+
+# ========================================================
+# Continue with other views (system_pair, interface_detail, sql_detail)
+# (Similar to previous version but with apply_global_filters() applied)
+# ========================================================
+
+def render_system_pair():
+    source = st.session_state.selected_source
+    target = st.session_state.selected_target
+    
+    # Breadcrumb
+    col1, col2 = st.columns([6, 1])
+    with col1:
+        st.markdown(f'<div class="breadcrumb">🏠 Overview → 🔗 {source} → {target}</div>', unsafe_allow_html=True)
+    with col2:
+        if st.button("← Back"):
+            navigate_to_overview()
+    
+    st.markdown(f'<h1 style="color: #667eea;">🔗 {source} → {target}</h1>', unsafe_allow_html=True)
+    
+    # Filter interfaces - apply global filters FIRST, then filter by system pair
+    df = apply_global_filters(st.session_state.interface_df)
+    filtered = df[(df['source_system'] == source) & (df['target_system'] == target)]
+    
+    # Show active filters
+    active_filters = get_active_filter_count()
+    if active_filters > 0:
+        st.info(f"🔍 {active_filters} global filter(s) active")
+    
+    # Summary
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("Interfaces", len(filtered))
+    with col2:
+        if 'disposition' in filtered.columns:
+            retain = len(filtered[filtered['disposition'].str.contains('Retain', case=False, na=False)])
+            st.metric("Retain", retain)
+    with col3:
+        if 'disposition' in filtered.columns:
+            replace = len(filtered[filtered['disposition'].str.contains('Replace', case=False, na=False)])
+            st.metric("Replace", replace)
+    
+    st.markdown("---")
+    
+    if filtered.empty:
+        st.warning("⚠️ No interfaces match current filters for this system pair.")
+        return
+    
+    # Interface list
+    st.subheader("📋 Interfaces")
+    
+    for _, row in filtered.iterrows():
+        interface = safe_get(row, 'integration')
+        desc = safe_get(row, 'description')
+        disp = safe_get(row, 'disposition')
+        type_val = safe_get(row, 'type')
+        
+        col1, col2 = st.columns([5, 1])
+        
+        with col1:
+            st.markdown(f'<div class="interactive-card"><div class="card-title">{interface}</div><div class="card-subtitle">{desc[:100]}...</div><div style="margin-top: 0.5rem; color: #666;">Disposition: {disp} | Type: {type_val}</div></div>', unsafe_allow_html=True)
+        
+        with col2:
+            if st.button("Details →", key=f"int_{interface}"):
+                navigate_to_interface(interface)
+
+def render_interface_detail():
+    interface = st.session_state.selected_interface
+    source = st.session_state.selected_source
+    target = st.session_state.selected_target
+    
+    # Breadcrumb
+    col1, col2 = st.columns([6, 1])
+    with col1:
+        st.markdown(f'<div class="breadcrumb">🏠 Overview → 🔗 {source} → {target} → 📋 {interface}</div>', unsafe_allow_html=True)
+    with col2:
+        if st.button("← Back"):
+            navigate_to_system_pair(source, target)
+    
+    st.markdown(f'<h1 style="color: #667eea;">📋 {interface}</h1>', unsafe_allow_html=True)
+    
+    # Get interface details
+    df = st.session_state.interface_df
+    int_row = df[df['integration'] == interface].iloc[0]
+    
+    # Details
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Interface Information")
+        st.write(f"**Description:** {safe_get(int_row, 'description')}")
+        st.write(f"**Type:** {safe_get(int_row, 'type')}")
+        st.write(f"**Disposition:** {safe_get(int_row, 'disposition')}")
+        st.write(f"**Recommended Approach:** {safe_get(int_row, 'recommended_approach')}")
+        st.write(f"**Data Set:** {safe_get(int_row, 'data_set')}")
+    
+    with col2:
+        st.subheader("Connection Details")
+        st.write(f"**Source System:** {safe_get(int_row, 'source_system')}")
+        st.write(f"**Target System:** {safe_get(int_row, 'target_system')}")
+    
+    st.markdown("---")
+    
+    # Find matching SQL
+    if st.session_state.mapping_df is not None:
+        matched_sql = st.session_state.mapping_df[
+            st.session_state.mapping_df['integration'] == interface
+        ]
+        
+        if not matched_sql.empty:
+            st.subheader("💻 Matching SQL Queries")
+            st.write(f"Found {len(matched_sql)} matching SQL queries")
+            
+            for _, sql_row in matched_sql.iterrows():
+                query = safe_get(sql_row, 'queryname')
+                score = safe_get(sql_row, 'final_score')
+                confidence = safe_get(sql_row, 'confidence')
+                tables = safe_get(sql_row, 'tables')
+                
+                conf_class = f"confidence-{confidence.lower()}" if confidence else "confidence-low"
+                
+                col1, col2 = st.columns([5, 1])
+                
+                with col1:
+                    st.markdown(f'''
+                    <div class="interactive-card">
+                        <div class="card-title">{query}</div>
+                        <div class="card-subtitle">Tables: {tables}</div>
+                        <div style="margin-top: 0.5rem;">
+                            <span class="{conf_class}">{confidence} Confidence ({score}%)</span>
+                        </div>
+                    </div>
+                    ''', unsafe_allow_html=True)
+                
+                with col2:
+                    if st.button("SQL Details →", key=f"sql_{query}"):
+                        navigate_to_sql_detail(query)
+        else:
+            st.info("No matching SQL queries found. Generate mapping first.")
+    else:
+        st.info("Generate SQL mapping to see matched queries.")
+
+def render_sql_detail():
+    query_name = st.session_state.selected_sql
+    interface = st.session_state.selected_interface
+    
+    # Breadcrumb
+    col1, col2 = st.columns([6, 1])
+    with col1:
+        st.markdown(f'<div class="breadcrumb">🏠 Overview → ... → 📋 {interface} → 💻 {query_name}</div>', unsafe_allow_html=True)
+    with col2:
+        if st.button("← Back"):
+            navigate_to_interface(interface)
+    
+    st.markdown(f'<h1 style="color: #667eea;">💻 {query_name}</h1>', unsafe_allow_html=True)
+    
+    # Get SQL details
+    sql_df = st.session_state.sql_df
+    sql_row = sql_df[sql_df['queryname'] == query_name].iloc[0]
+    
+    raw_sql = safe_get(sql_row, 'rawsql')
+    tables = safe_get(sql_row, 'tables')
+    columns_str = safe_get(sql_row, 'selectcolumns')
+    
+    # Parse columns
+    if columns_str:
+        columns = [c.strip() for c in columns_str.split(',')]
+    else:
+        columns = []
+    
+    # Analyze
+    analysis = analyze_sql(raw_sql)
+    
+    # Tabs
+    tab1, tab2, tab3, tab4 = st.tabs(["💻 SQL Code", "📊 Analysis", "🤖 AI Insights", "📋 Details"])
+    
+    with tab1:
+        st.subheader("SQL Query")
+        st.code(raw_sql, language="sql")
+    
+    with tab2:
+        st.subheader("Query Analysis")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Tables", len(analysis['tables']))
+        with col2:
+            st.metric("Columns", len(columns))
+        with col3:
+            st.metric("Joins", len(analysis['joins']))
+        
+        st.write(f"**Complexity:** {analysis['complexity']}")
+        
+        st.markdown("---")
+        
+        st.subheader("📊 Tables Used")
+        for table in analysis['tables'][:10]:
+            st.markdown(f'<span class="table-badge">{table}</span>', unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        st.subheader("📋 Columns Retrieved")
+        for col in columns[:20]:
+            st.markdown(f'<span class="column-badge">{col}</span>', unsafe_allow_html=True)
+        
+        if len(columns) > 20:
+            st.write(f"... and {len(columns) - 20} more columns")
+    
+    with tab3:
+        st.subheader("🤖 AI-Generated Insights")
+        
+        st.markdown('<div class="ai-insight">', unsafe_allow_html=True)
+        st.markdown("### 👔 Business Explanation")
+        business_exp = generate_business_explanation(analysis['tables'], columns)
+        st.write(business_exp)
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        st.markdown('<div class="ai-insight" style="background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%); border-left-color: #2196f3;">', unsafe_allow_html=True)
+        st.markdown("### ⚙️ Technical Explanation")
+        technical_exp = generate_technical_explanation(analysis['tables'], analysis['joins'])
+        st.write(technical_exp)
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with tab4:
+        st.subheader("Query Metadata")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write(f"**System:** {safe_get(sql_row, 'system')}")
+            st.write(f"**File:** {safe_get(sql_row, 'file')}")
+            st.write(f"**Query Name:** {query_name}")
+        
+        with col2:
+            st.write(f"**Tables:** {tables}")
+            st.write(f"**Column Count:** {len(columns)}")
+            st.write(f"**Complexity:** {analysis['complexity']}")
+
+# ========================================================
+# MAIN APP
+# ========================================================
+
+def main():
+    # Sidebar
+    st.sidebar.title("🌐 Data Explorer 360°")
+    st.sidebar.markdown("---")
+    
+    # Upload section
+    with st.sidebar.expander("📂 Upload Data", expanded=st.session_state.interface_df is None):
+        interface_file = st.file_uploader("Interface Inventory", type=["xlsx", "xls"])
+        
+        if interface_file:
+            with st.spinner("Loading interface data..."):
+                st.session_state.interface_df = load_interface_inventory(interface_file)
+            st.success(f"✅ Loaded {len(st.session_state.interface_df)} interfaces")
+        
+        sql_file = st.file_uploader("SQL Metadata", type=["xlsx", "xls"])
+        
+        if sql_file:
+            with st.spinner("Loading SQL data..."):
+                st.session_state.sql_df = load_sql_metadata(sql_file)
+            st.success(f"✅ Loaded {len(st.session_state.sql_df)} queries")
+        
+        if st.session_state.interface_df is not None and st.session_state.sql_df is not None:
+            if st.button("🔗 Generate Mapping", use_container_width=True):
+                with st.spinner("Generating interface-SQL mapping..."):
+                    st.session_state.mapping_df = generate_mapping(
+                        st.session_state.interface_df,
+                        st.session_state.sql_df
+                    )
+                st.success(f"✅ Generated {len(st.session_state.mapping_df)} mappings")
+                st.rerun()
+    
+    # GLOBAL FILTERS SECTION
+    if st.session_state.interface_df is not None:
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("🔍 Global Filters")
+        
+        active_count = get_active_filter_count()
+        if active_count > 0:
+            st.sidebar.markdown(f'<span class="filter-badge">{active_count} Active</span>', unsafe_allow_html=True)
+        
+        df = st.session_state.interface_df
+        
+        # Source System Filter
+        source_systems = sorted(df['source_system'].dropna().unique())
+        st.session_state.filter_source_systems = st.sidebar.multiselect(
+            "Source System",
+            options=source_systems,
+            default=st.session_state.filter_source_systems,
+            key="filter_source"
+        )
+        
+        # Target System Filter
+        target_systems = sorted(df['target_system'].dropna().unique())
+        st.session_state.filter_target_systems = st.sidebar.multiselect(
+            "Target System",
+            options=target_systems,
+            default=st.session_state.filter_target_systems,
+            key="filter_target"
+        )
+        
+        # Type Filter
+        if 'type' in df.columns:
+            types = sorted(df['type'].dropna().unique())
+            st.session_state.filter_types = st.sidebar.multiselect(
+                "Type",
+                options=types,
+                default=st.session_state.filter_types,
+                key="filter_type"
+            )
+        
+        # Disposition Filter
+        if 'disposition' in df.columns:
+            dispositions = sorted(df['disposition'].dropna().unique())
+            st.session_state.filter_dispositions = st.sidebar.multiselect(
+                "Disposition",
+                options=dispositions,
+                default=st.session_state.filter_dispositions,
+                key="filter_disp"
+            )
+        
+        # Recommended Approach Filter
+        if 'recommended_approach' in df.columns:
+            approaches = sorted(df['recommended_approach'].dropna().unique())
+            st.session_state.filter_approaches = st.sidebar.multiselect(
+                "Recommended Approach",
+                options=approaches,
+                default=st.session_state.filter_approaches,
+                key="filter_approach"
+            )
+        
+        # Clear Filters Button
+        if active_count > 0:
+            if st.sidebar.button("🗑️ Clear All Filters", use_container_width=True):
+                clear_all_filters()
+                st.rerun()
+    
+    # Navigation
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📍 Current Location")
+    
+    level = st.session_state.navigation_level
+    
+    if level == 'overview':
+        st.sidebar.write("🏠 360° Overview")
+    elif level == 'system_pair':
+        st.sidebar.write(f"🔗 {st.session_state.selected_source} → {st.session_state.selected_target}")
+    elif level == 'interface_detail':
+        st.sidebar.write(f"📋 {st.session_state.selected_interface}")
+    elif level == 'sql_detail':
+        st.sidebar.write(f"💻 {st.session_state.selected_sql}")
+    
+    if level != 'overview':
+        if st.sidebar.button("🏠 Return to Overview", use_container_width=True):
+            navigate_to_overview()
+    
+    # Main content
+    if st.session_state.interface_df is None:
+        st.markdown('<div class="premium-header"><h1 class="premium-title">🌐 Welcome to Data Explorer 360°</h1><p class="premium-subtitle">Upload your data to begin exploration</p></div>', unsafe_allow_html=True)
+        
+        st.info("👈 Upload your Interface Inventory and SQL Metadata files in the sidebar to get started")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("""
+            ### 🎯 Level 1: Overview
+            - See all system connections
+            - Total interface count
+            - Quick navigation
+            - **Global Filters**
+            """)
+        
+        with col2:
+            st.markdown("""
+            ### 🔗 Level 2: System Pair
+            - Interfaces between systems
+            - Disposition breakdown
+            - Interface details
+            - **Filtered by global filters**
+            """)
+        
+        with col3:
+            st.markdown("""
+            ### 💻 Level 3 & 4: Deep Dive
+            - Interface specifications
+            - Matched SQL queries
+            - AI-powered insights
+            - Column-level details
+            """)
+    
+    else:
+        # Render appropriate view
+        if level == 'overview':
+            render_overview()
+        elif level == 'system_pair':
+            render_system_pair()
+        elif level == 'interface_detail':
+            render_interface_detail()
+        elif level == 'sql_detail':
+            render_sql_detail()
+
+if __name__ == "__main__":
+    main()
