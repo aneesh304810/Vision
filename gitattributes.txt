@@ -1,8 +1,8 @@
 
 """
 ========================================================
-Enterprise Data Explorer 360° - Enhanced Semantic Matching
-Optimized for your specific data structure
+Enterprise Data Explorer 360° - Pro Edition
+WITH GLOBAL FILTERS AND INTERACTIVE VISUAL GRAPHS
 ========================================================
 """
 
@@ -13,6 +13,15 @@ import re
 import os
 from collections import defaultdict
 import numpy as np
+
+# Visualization
+try:
+    import plotly.graph_objects as go
+    import networkx as nx
+    PLOTLY_AVAILABLE = True
+except:
+    PLOTLY_AVAILABLE = False
+    st.warning("⚠️ Plotly not installed. Visual graphs disabled. Install with: pip install plotly networkx")
 
 # ML/NLP
 try:
@@ -1043,6 +1052,302 @@ def clear_all_filters():
 # Continue in next message due to length...
 
 # ========================================================
+# INTERACTIVE VISUAL GRAPH GENERATION
+# ========================================================
+
+def create_system_network_graph(interface_df):
+    """
+    Create interactive network graph of system connections
+    Returns Plotly figure
+    """
+    
+    if not PLOTLY_AVAILABLE:
+        return None
+    
+    # Build network graph using NetworkX
+    G = nx.DiGraph()
+    
+    # Count connections between systems
+    connections = defaultdict(lambda: {'count': 0, 'dispositions': defaultdict(int)})
+    
+    for _, row in interface_df.iterrows():
+        source = safe_get(row, 'source_system', 'Unknown')
+        target = safe_get(row, 'target_system', 'Unknown')
+        disposition = safe_get(row, 'disposition', 'Unknown')
+        
+        if source and target:
+            key = (source, target)
+            connections[key]['count'] += 1
+            connections[key]['dispositions'][disposition] += 1
+    
+    # Add nodes and edges
+    for (source, target), data in connections.items():
+        G.add_edge(source, target, weight=data['count'], dispositions=data['dispositions'])
+    
+    # Use spring layout for positioning
+    pos = nx.spring_layout(G, k=2, iterations=50)
+    
+    # Create edge traces
+    edge_traces = []
+    
+    for edge in G.edges():
+        source, target = edge
+        x0, y0 = pos[source]
+        x1, y1 = pos[target]
+        
+        weight = G[source][target]['weight']
+        
+        # Create edge line
+        edge_trace = go.Scatter(
+            x=[x0, x1, None],
+            y=[y0, y1, None],
+            mode='lines',
+            line=dict(width=min(weight * 0.5, 10), color='#888'),
+            hoverinfo='text',
+            text=f'{source} → {target}<br>{weight} interface(s)',
+            showlegend=False
+        )
+        edge_traces.append(edge_trace)
+        
+        # Add arrow annotation
+        # Calculate arrow position (80% along the edge)
+        arrow_x = x0 + 0.8 * (x1 - x0)
+        arrow_y = y0 + 0.8 * (y1 - y0)
+    
+    # Create node trace
+    node_x = []
+    node_y = []
+    node_text = []
+    node_size = []
+    node_color = []
+    
+    for node in G.nodes():
+        x, y = pos[node]
+        node_x.append(x)
+        node_y.append(y)
+        
+        # Calculate node metrics
+        outgoing = len(list(G.successors(node)))
+        incoming = len(list(G.predecessors(node)))
+        total_interfaces = sum([G[node][succ]['weight'] for succ in G.successors(node)]) if outgoing > 0 else 0
+        total_interfaces += sum([G[pred][node]['weight'] for pred in G.predecessors(node)]) if incoming > 0 else 0
+        
+        # Get disposition breakdown
+        retain = replace = tbd = 0
+        for succ in G.successors(node):
+            disps = G[node][succ].get('dispositions', {})
+            for disp, count in disps.items():
+                if 'retain' in disp.lower():
+                    retain += count
+                elif 'replace' in disp.lower():
+                    replace += count
+                else:
+                    tbd += count
+        
+        for pred in G.predecessors(node):
+            disps = G[pred][node].get('dispositions', {})
+            for disp, count in disps.items():
+                if 'retain' in disp.lower():
+                    retain += count
+                elif 'replace' in disp.lower():
+                    replace += count
+                else:
+                    tbd += count
+        
+        # Node size based on interface count
+        node_size.append(max(20 + total_interfaces * 2, 30))
+        
+        # Node color based on dominant disposition
+        if retain > replace and retain > tbd:
+            node_color.append('#4CAF50')  # Green for Retain
+        elif replace > retain and replace > tbd:
+            node_color.append('#f44336')  # Red for Replace
+        else:
+            node_color.append('#FFC107')  # Yellow for TBD
+        
+        # Hover text
+        hover_text = f"<b>{node}</b><br>"
+        hover_text += f"Total Interfaces: {total_interfaces}<br>"
+        hover_text += f"Outgoing: {outgoing} systems<br>"
+        hover_text += f"Incoming: {incoming} systems<br>"
+        hover_text += f"<br><b>Disposition:</b><br>"
+        hover_text += f"Retain: {retain}<br>"
+        hover_text += f"Replace: {replace}<br>"
+        hover_text += f"TBD: {tbd}"
+        
+        node_text.append(hover_text)
+    
+    node_trace = go.Scatter(
+        x=node_x,
+        y=node_y,
+        mode='markers+text',
+        hoverinfo='text',
+        text=[node for node in G.nodes()],
+        hovertext=node_text,
+        textposition="top center",
+        marker=dict(
+            size=node_size,
+            color=node_color,
+            line=dict(width=2, color='white'),
+            opacity=0.9
+        ),
+        textfont=dict(size=10, color='black'),
+        showlegend=False
+    )
+    
+    # Create figure
+    fig = go.Figure(data=edge_traces + [node_trace])
+    
+    fig.update_layout(
+        title={
+            'text': "🌐 System Architecture Network<br><sub>Node size = interface count | Color: Green=Retain, Red=Replace, Yellow=TBD</sub>",
+            'x': 0.5,
+            'xanchor': 'center',
+            'font': {'size': 20}
+        },
+        showlegend=False,
+        hovermode='closest',
+        margin=dict(b=20, l=5, r=5, t=80),
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        plot_bgcolor='#f8f9fa',
+        height=700
+    )
+    
+    return fig
+
+def create_interface_flow_graph(interface_row, matched_sql_df):
+    """
+    Create flow diagram for a specific interface
+    Shows: Source → Interface → Target → SQL Queries
+    """
+    
+    if not PLOTLY_AVAILABLE:
+        return None
+    
+    source = safe_get(interface_row, 'source_system', 'Source')
+    target = safe_get(interface_row, 'target_system', 'Target')
+    integration = safe_get(interface_row, 'integration', 'Interface')
+    
+    # Create hierarchical layout
+    fig = go.Figure()
+    
+    # Level 1: Source System
+    fig.add_trace(go.Scatter(
+        x=[0],
+        y=[3],
+        mode='markers+text',
+        marker=dict(size=60, color='#2196F3', line=dict(width=2, color='white')),
+        text=[source],
+        textposition="middle center",
+        textfont=dict(size=12, color='white'),
+        hovertext=f"<b>Source System</b><br>{source}",
+        hoverinfo='text',
+        showlegend=False
+    ))
+    
+    # Level 2: Interface
+    disposition = safe_get(interface_row, 'disposition', 'Unknown')
+    int_color = '#4CAF50' if 'retain' in disposition.lower() else '#f44336' if 'replace' in disposition.lower() else '#FFC107'
+    
+    fig.add_trace(go.Scatter(
+        x=[1],
+        y=[3],
+        mode='markers+text',
+        marker=dict(size=80, color=int_color, line=dict(width=2, color='white')),
+        text=[integration[:20]],  # Truncate long names
+        textposition="middle center",
+        textfont=dict(size=10, color='white'),
+        hovertext=f"<b>Interface</b><br>{integration}<br>Disposition: {disposition}",
+        hoverinfo='text',
+        showlegend=False
+    ))
+    
+    # Level 3: Target System
+    fig.add_trace(go.Scatter(
+        x=[2],
+        y=[3],
+        mode='markers+text',
+        marker=dict(size=60, color='#9C27B0', line=dict(width=2, color='white')),
+        text=[target],
+        textposition="middle center",
+        textfont=dict(size=12, color='white'),
+        hovertext=f"<b>Target System</b><br>{target}",
+        hoverinfo='text',
+        showlegend=False
+    ))
+    
+    # Level 4: SQL Queries
+    if matched_sql_df is not None and not matched_sql_df.empty:
+        num_queries = min(len(matched_sql_df), 5)  # Show max 5
+        y_positions = [4 - i * 0.5 for i in range(num_queries)]
+        
+        for idx, (_, sql_row) in enumerate(matched_sql_df.head(5).iterrows()):
+            query = safe_get(sql_row, 'queryname', 'Query')
+            confidence = safe_get(sql_row, 'confidence', 'Unknown')
+            score = safe_get(sql_row, 'final_score', 0)
+            
+            query_color = '#4CAF50' if confidence == 'High' else '#FFC107' if confidence == 'Medium' else '#f44336'
+            
+            fig.add_trace(go.Scatter(
+                x=[3],
+                y=[y_positions[idx]],
+                mode='markers+text',
+                marker=dict(size=40, color=query_color, line=dict(width=1, color='white')),
+                text=[query[:15]],
+                textposition="middle right",
+                textfont=dict(size=8, color='white'),
+                hovertext=f"<b>SQL Query</b><br>{query}<br>Confidence: {confidence} ({score}%)",
+                hoverinfo='text',
+                showlegend=False
+            ))
+            
+            # Arrow from target to query
+            fig.add_annotation(
+                x=2.1, y=3,
+                ax=2.9, ay=y_positions[idx],
+                xref='x', yref='y',
+                axref='x', ayref='y',
+                showarrow=True,
+                arrowhead=2,
+                arrowsize=1,
+                arrowwidth=1,
+                arrowcolor='#888'
+            )
+    
+    # Arrows between main nodes
+    for x0, x1 in [(0, 1), (1, 2)]:
+        fig.add_annotation(
+            x=x0 + 0.1, y=3,
+            ax=x1 - 0.1, ay=3,
+            xref='x', yref='y',
+            axref='x', ayref='y',
+            showarrow=True,
+            arrowhead=2,
+            arrowsize=1.5,
+            arrowwidth=2,
+            arrowcolor='#667eea'
+        )
+    
+    fig.update_layout(
+        title={
+            'text': f"📋 {integration} - Data Flow",
+            'x': 0.5,
+            'xanchor': 'center',
+            'font': {'size': 18}
+        },
+        showlegend=False,
+        hovermode='closest',
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-0.5, 3.8]),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[0, 5]),
+        plot_bgcolor='white',
+        height=500,
+        margin=dict(l=20, r=150, t=60, b=20)
+    )
+    
+    return fig
+
+# ========================================================
 # NAVIGATION
 # ========================================================
 
@@ -1074,6 +1379,192 @@ def navigate_to_sql_detail(query_name):
 # VIEWS (Simplified for length - same as before)
 # ========================================================
 
+# ========================================================
+# NETWORK VISUALIZATION
+# ========================================================
+
+def render_network_graph(df, color_by, show_labels):
+    """Render interactive network graph of interfaces using Plotly"""
+    
+    try:
+        import plotly.graph_objects as go
+        
+        # Build node and edge data
+        nodes = {}
+        edges = {}
+        
+        for _, row in df.iterrows():
+            source = row['source_system']
+            target = row['target_system']
+            
+            # Track nodes
+            nodes[source] = nodes.get(source, {'in': 0, 'out': 0})
+            nodes[target] = nodes.get(target, {'in': 0, 'out': 0})
+            
+            nodes[source]['out'] += 1
+            nodes[target]['in'] += 1
+            
+            # Track edges
+            edge_key = (source, target)
+            edges[edge_key] = edges.get(edge_key, 0) + 1
+        
+        # Simple circular layout
+        import math
+        n = len(nodes)
+        node_list = list(nodes.keys())
+        positions = {}
+        
+        for i, node in enumerate(node_list):
+            angle = 2 * math.pi * i / n
+            positions[node] = (math.cos(angle), math.sin(angle))
+        
+        # Create edge traces
+        edge_traces = []
+        
+        for (source, target), count in edges.items():
+            x0, y0 = positions[source]
+            x1, y1 = positions[target]
+            
+            # Edge color
+            if color_by == "Interface Count":
+                # Color by count (gradient)
+                max_count = max(edges.values())
+                intensity = count / max_count
+                edge_color = f'rgba(102, 126, 234, {0.3 + intensity * 0.7})'
+            else:
+                # Color by source system
+                source_idx = node_list.index(source)
+                colors = ['#667eea', '#764ba2', '#f093fb', '#4facfe', '#00f2fe']
+                edge_color = colors[source_idx % len(colors)]
+            
+            edge_trace = go.Scatter(
+                x=[x0, x1, None],
+                y=[y0, y1, None],
+                mode='lines',
+                line=dict(
+                    width=min(count * 1.5, 8),
+                    color=edge_color
+                ),
+                hoverinfo='text',
+                text=f'{source} → {target}<br>{count} interface(s)',
+                showlegend=False,
+                opacity=0.6
+            )
+            edge_traces.append(edge_trace)
+        
+        # Create node trace
+        node_x = []
+        node_y = []
+        node_text = []
+        node_size = []
+        node_labels = []
+        
+        for node in node_list:
+            x, y = positions[node]
+            node_x.append(x)
+            node_y.append(y)
+            
+            in_count = nodes[node]['in']
+            out_count = nodes[node]['out']
+            total = in_count + out_count
+            
+            node_text.append(f'<b>{node}</b><br>Incoming: {in_count}<br>Outgoing: {out_count}')
+            node_size.append(15 + total * 3)
+            node_labels.append(node)
+        
+        node_trace = go.Scatter(
+            x=node_x,
+            y=node_y,
+            mode='markers+text' if show_labels else 'markers',
+            text=node_labels if show_labels else None,
+            textposition="top center",
+            textfont=dict(size=10, color='#333'),
+            hoverinfo='text',
+            hovertext=node_text,
+            marker=dict(
+                size=node_size,
+                color='#667eea',
+                line=dict(width=2, color='white'),
+                opacity=0.9
+            ),
+            showlegend=False
+        )
+        
+        # Create figure
+        fig = go.Figure(data=edge_traces + [node_trace])
+        
+        fig.update_layout(
+            title=dict(
+                text="🕸️ System Interface Network - Interactive",
+                font=dict(size=18, color='#667eea'),
+                x=0.5,
+                xanchor='center'
+            ),
+            showlegend=False,
+            hovermode='closest',
+            margin=dict(b=20, l=20, r=20, t=60),
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            height=500,
+            plot_bgcolor='rgba(248, 249, 250, 0.5)',
+            paper_bgcolor='white'
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Stats and legend
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Total Systems", len(nodes))
+        
+        with col2:
+            st.metric("Total Connections", len(edges))
+        
+        with col3:
+            max_interfaces = max(edges.values())
+            busiest = [f"{s}→{t}" for (s,t), c in edges.items() if c == max_interfaces][0]
+            st.metric("Busiest Connection", f"{max_interfaces} interfaces")
+        
+        with st.expander("ℹ️ How to Read the Graph"):
+            st.markdown("""
+            **Visual Guide:**
+            - 🔵 **Nodes (circles)** = Systems
+            - 📏 **Node size** = Number of connections (bigger = more interfaces)
+            - ➡️ **Arrows** = Data flow direction
+            - 📊 **Line thickness** = Number of interfaces
+            - 🎨 **Color** = Intensity or source system
+            - 🖱️ **Hover** over elements for details
+            
+            **Interpretation:**
+            - Large nodes = Hub systems (many connections)
+            - Thick lines = Many interfaces between systems
+            - Hover for exact counts
+            """)
+        
+    except ImportError:
+        st.warning("⚠️ Network visualization requires plotly. Install with: `pip install plotly`")
+        st.info("Showing connection matrix instead:")
+        
+        # Fallback: Connection matrix
+        sources = sorted(df['source_system'].unique())
+        targets = sorted(df['target_system'].unique())
+        
+        matrix_data = []
+        for source in sources:
+            row = {'Source →': source}
+            for target in targets:
+                count = len(df[(df['source_system'] == source) & (df['target_system'] == target)])
+                row[target] = count if count > 0 else "-"
+            matrix_data.append(row)
+        
+        matrix_df = pd.DataFrame(matrix_data)
+        st.dataframe(matrix_df, use_container_width=True, height=400)
+
+# ========================================================
+# VIEWS
+# ========================================================
+
 def render_overview():
     st.markdown('<div class="premium-header"><h1 class="premium-title">🌐 Data Explorer 360°</h1><p class="premium-subtitle">Enhanced Semantic Matching</p></div>', unsafe_allow_html=True)
     
@@ -1100,6 +1591,63 @@ def render_overview():
         if st.session_state.mapping_df is not None:
             mapping_filtered = apply_global_filters(st.session_state.mapping_df)
             st.markdown(f'<div class="metric-card"><div class="metric-value">{len(mapping_filtered)}</div><div class="metric-label">Mappings</div></div>', unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # ========================================================
+    # INTERACTIVE SYSTEM NETWORK GRAPH
+    # ========================================================
+    
+    if PLOTLY_AVAILABLE and len(df) > 0:
+        st.subheader("🌐 Interactive System Architecture")
+        
+        with st.expander("ℹ️ How to use this graph", expanded=False):
+            st.markdown("""
+            **Interactive Features:**
+            - 🖱️ **Hover** over nodes to see system details
+            - 🔍 **Zoom** in/out using mouse wheel or controls
+            - 👆 **Pan** by clicking and dragging
+            - 💾 **Export** by clicking camera icon (top right of graph)
+            
+            **Visual Legend:**
+            - 🟢 **Green nodes** = Majority Retain interfaces
+            - 🔴 **Red nodes** = Majority Replace interfaces
+            - 🟡 **Yellow nodes** = Majority TBD interfaces
+            - **Node size** = Number of interfaces
+            - **Line thickness** = Number of connections
+            
+            **Tips:**
+            - Larger nodes = more interfaces
+            - Click system names in the table below to drill down
+            - Use global filters (sidebar) to focus on specific systems
+            """)
+        
+        try:
+            fig = create_system_network_graph(df)
+            if fig:
+                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True, 'displaylogo': False})
+                
+                # Export option
+                col1, col2, col3 = st.columns([1, 1, 2])
+                with col1:
+                    if st.button("📥 Export Connections"):
+                        connections = df.groupby(['source_system', 'target_system']).size().reset_index(name='count')
+                        st.download_button(
+                            "Download CSV",
+                            connections.to_csv(index=False),
+                            "system_connections.csv",
+                            "text/csv",
+                            key="download_connections"
+                        )
+            else:
+                st.warning("Could not generate graph")
+        except Exception as e:
+            st.error(f"Error creating graph: {e}")
+            st.info("Make sure libraries are installed: `pip install plotly networkx`")
+    else:
+        if not PLOTLY_AVAILABLE:
+            st.info("📊 **Visual graphs disabled.** Install for interactive visualizations:")
+            st.code("pip install plotly networkx")
     
     st.markdown("---")
     st.subheader("🔗 System Connections")
@@ -1203,6 +1751,25 @@ def render_interface_detail():
         st.write(f"**Target:** {safe_get(int_row, 'target_system')}")
         st.write(f"**Direction:** {safe_get(int_row, 'inbound_outbound')}")
     
+    # ========================================================
+    # INTERFACE FLOW VISUALIZATION
+    # ========================================================
+    
+    if PLOTLY_AVAILABLE and st.session_state.mapping_df is not None:
+        st.markdown("---")
+        matched_sql_for_graph = st.session_state.mapping_df[
+            st.session_state.mapping_df['integration'] == interface
+        ] if 'integration' in st.session_state.mapping_df.columns else pd.DataFrame()
+        
+        if not matched_sql_for_graph.empty:
+            st.subheader("📊 Interface Data Flow Diagram")
+            try:
+                flow_fig = create_interface_flow_graph(int_row, matched_sql_for_graph)
+                if flow_fig:
+                    st.plotly_chart(flow_fig, use_container_width=True, config={'displayModeBar': False})
+            except Exception as e:
+                st.warning(f"Could not generate flow diagram: {e}")
+    
     st.markdown("---")
     
     if st.session_state.mapping_df is not None and not st.session_state.mapping_df.empty:
@@ -1265,7 +1832,24 @@ def render_sql_detail():
     
     st.markdown(f'<h1 style="color: #667eea;">💻 {query_name}</h1>', unsafe_allow_html=True)
     
-    # Get SQL details
+    # IMPORTANT: Get file info from MAPPING (not SQL metadata)
+    # The mapping shows which specific file matched this interface
+    mapping_df = st.session_state.mapping_df
+    matched_file = None
+    matched_system = None
+    
+    if mapping_df is not None and not mapping_df.empty:
+        # Find the mapping row for this interface + query combination
+        mapping_match = mapping_df[
+            (mapping_df['integration'] == interface) & 
+            (mapping_df['queryname'] == query_name)
+        ]
+        
+        if not mapping_match.empty:
+            matched_file = safe_get(mapping_match.iloc[0], 'sql_file')
+            matched_system = safe_get(mapping_match.iloc[0], 'sql_system')
+    
+    # Get SQL details for the query code
     sql_df = st.session_state.sql_df
     if sql_df is None or sql_df.empty:
         st.error("⚠️ SQL metadata not available")
@@ -1285,6 +1869,10 @@ def render_sql_detail():
     # Extract data
     raw_sql = safe_get(sql_row, 'rawsql', 'SQL code not available')
     tables_str = safe_get(sql_row, 'tables', '')
+    
+    # Use matched file from mapping if available, otherwise fall back to SQL metadata
+    display_file = matched_file if matched_file else safe_get(sql_row, 'file')
+    display_system = matched_system if matched_system else safe_get(sql_row, 'system')
     
     # Parse tables
     if tables_str:
@@ -1307,8 +1895,10 @@ def render_sql_detail():
         st.markdown("---")
         col1, col2 = st.columns(2)
         with col1:
-            st.write(f"**System:** {safe_get(sql_row, 'system')}")
-            st.write(f"**File:** {safe_get(sql_row, 'file')}")
+            st.write(f"**System:** {display_system}")
+            st.write(f"**File:** {display_file}")
+            if matched_file:
+                st.success("✅ Showing file from mapping match")
         with col2:
             st.write(f"**Query Name:** {query_name}")
             st.write(f"**Complexity:** {analysis['complexity']}")
@@ -1390,8 +1980,10 @@ The query accesses: {', '.join(analysis['tables'][:5])}
         col1, col2 = st.columns(2)
         
         with col1:
-            st.write(f"**System:** {safe_get(sql_row, 'system')}")
-            st.write(f"**File Path:** {safe_get(sql_row, 'file')}")
+            st.write(f"**System:** {display_system}")
+            st.write(f"**File Path:** {display_file}")
+            if matched_file:
+                st.info("ℹ️ File shown from interface-SQL mapping match")
             st.write(f"**Query Name:** {query_name}")
         
         with col2:
