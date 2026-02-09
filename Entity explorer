@@ -1,0 +1,593 @@
+"""
+========================================================
+ENTITY MODEL EXPLORER - Modular Component
+========================================================
+Can be imported and used by main Data Explorer
+or run standalone
+
+Features:
+- Load Entity Model Reference Excel
+- Entity Relationship Diagrams
+- Field-level lineage (Source → DW)
+- Search entities and fields
+- Cross-reference with interfaces
+========================================================
+"""
+
+import streamlit as st
+import pandas as pd
+import os
+from collections import defaultdict
+
+# Visualization
+try:
+    import plotly.graph_objects as go
+    import networkx as nx
+    PLOTLY_AVAILABLE = True
+except:
+    PLOTLY_AVAILABLE = False
+
+# ========================================================
+# UTILITY FUNCTIONS
+# ========================================================
+
+def clean_column_name(col):
+    """Clean column names for consistent access"""
+    return str(col).strip().lower().replace(" ", "_").replace("/", "_").replace("-", "_").replace("(", "").replace(")", "").strip("_")
+
+def safe_get(row, column, default=""):
+    """Safely get value from row"""
+    try:
+        val = row.get(column, default) if isinstance(row, dict) else getattr(row, column, default)
+        return val if pd.notna(val) and str(val) != 'nan' and str(val) != '' else default
+    except:
+        return default
+
+# ========================================================
+# ENTITY MODEL LOADER
+# ========================================================
+
+def load_entity_model_reference(file):
+    """
+    Load Entity Model Reference Excel
+    
+    Expected structure:
+    - Sheet 1: "Entity Matrix" - List of all entities and relationships
+    - Other Sheets: Individual entity models (e.g., "Account", "Transaction")
+      - Columns: Source Field, Field Description, DW Column Name (or similar)
+    
+    Returns:
+        entity_matrix_df: DataFrame with entity matrix
+        entity_models: Dict of {entity_name: DataFrame with field mappings}
+    """
+    
+    st.info("📚 Loading Entity Model Reference...")
+    
+    try:
+        # Read all sheet names
+        excel_file = pd.ExcelFile(file)
+        sheet_names = excel_file.sheet_names
+        
+        st.write(f"✅ Found {len(sheet_names)} sheets")
+        
+        # First sheet is Entity Matrix
+        entity_matrix = None
+        matrix_sheet_name = None
+        
+        for sheet in ["Entity Matrix", "entity matrix", "Matrix", "matrix", "Sheet1"]:
+            if sheet in sheet_names:
+                entity_matrix = pd.read_excel(file, sheet_name=sheet)
+                matrix_sheet_name = sheet
+                st.success(f"✅ Loaded Entity Matrix from sheet: '{sheet}'")
+                break
+        
+        if entity_matrix is None:
+            # Use first sheet
+            entity_matrix = pd.read_excel(file, sheet_name=0)
+            matrix_sheet_name = sheet_names[0]
+            st.info(f"ℹ️ Using first sheet as Entity Matrix: '{matrix_sheet_name}'")
+        
+        # Clean entity matrix
+        entity_matrix.columns = [clean_column_name(col) for col in entity_matrix.columns]
+        entity_matrix = entity_matrix.dropna(axis=1, how='all')
+        entity_matrix = entity_matrix.loc[:, ~entity_matrix.columns.str.contains("^unnamed", case=False)]
+        
+        # Show detected columns
+        with st.expander("📋 Entity Matrix Columns Detected", expanded=False):
+            st.write("Columns found:", list(entity_matrix.columns))
+            st.write(f"Rows: {len(entity_matrix)}")
+        
+        # Load all other sheets as entity models
+        entity_models = {}
+        
+        for sheet_name in sheet_names:
+            # Skip the matrix sheet
+            if sheet_name == matrix_sheet_name:
+                continue
+                
+            try:
+                df = pd.read_excel(file, sheet_name=sheet_name)
+                
+                # Clean columns
+                df.columns = [clean_column_name(col) for col in df.columns]
+                df = df.dropna(axis=1, how='all')
+                df = df.loc[:, ~df.columns.str.contains("^unnamed", case=False)]
+                
+                # Remove empty rows
+                df = df.dropna(how='all')
+                
+                # Clean strings
+                for col in df.select_dtypes(include=['object']).columns:
+                    df[col] = df[col].astype(str).str.strip()
+                    df[col] = df[col].replace({'nan': '', 'None': '', 'NaN': ''})
+                
+                # Store entity model
+                entity_models[sheet_name] = df
+                st.success(f"✅ Loaded entity: **{sheet_name}** ({len(df)} fields)")
+                
+            except Exception as e:
+                st.warning(f"⚠️ Could not load sheet '{sheet_name}': {e}")
+        
+        st.success(f"✅ **Total: {len(entity_models)} entity models loaded**")
+        
+        return entity_matrix, entity_models
+        
+    except Exception as e:
+        st.error(f"❌ Error loading Entity Model Reference: {e}")
+        return None, {}
+
+# ========================================================
+# ENTITY RELATIONSHIP DIAGRAM
+# ========================================================
+
+def create_entity_relationship_diagram(entity_matrix_df, entity_models):
+    """
+    Create interactive ERD from entity matrix
+    Shows entities as nodes, relationships as edges
+    """
+    
+    if not PLOTLY_AVAILABLE:
+        st.warning("⚠️ Plotly not available. Install: pip install plotly networkx")
+        return None
+    
+    try:
+        G = nx.Graph()
+        
+        # Method 1: Parse entity matrix for relationships
+        entities = set()
+        edges = []
+        
+        # Try to find entity columns in matrix
+        entity_cols = [col for col in entity_matrix_df.columns if any(x in col for x in ['entity', 'table', 'name'])]
+        
+        if len(entity_cols) >= 2:
+            # Found relationship columns
+            for _, row in entity_matrix_df.iterrows():
+                entity1 = safe_get(row, entity_cols[0])
+                entity2 = safe_get(row, entity_cols[1]) if len(entity_cols) > 1 else None
+                
+                if entity1:
+                    entities.add(entity1)
+                if entity2 and entity2 != entity1:
+                    entities.add(entity2)
+                    edges.append((entity1, entity2))
+        
+        # Method 2: Use entity model sheet names
+        if not entities:
+            entities = set(entity_models.keys())
+        
+        # Add all entities as nodes
+        for entity in entities:
+            field_count = len(entity_models.get(entity, pd.DataFrame()))
+            G.add_node(entity, fields=field_count)
+        
+        # Add edges
+        for e1, e2 in edges:
+            if e1 in G.nodes() and e2 in G.nodes():
+                G.add_edge(e1, e2)
+        
+        # Layout
+        pos = nx.spring_layout(G, k=3, iterations=50)
+        
+        # Create edge traces
+        edge_x = []
+        edge_y = []
+        
+        for edge in G.edges():
+            x0, y0 = pos[edge[0]]
+            x1, y1 = pos[edge[1]]
+            edge_x.extend([x0, x1, None])
+            edge_y.extend([y0, y1, None])
+        
+        edge_trace = go.Scatter(
+            x=edge_x,
+            y=edge_y,
+            line=dict(width=2, color='#888'),
+            hoverinfo='none',
+            mode='lines'
+        )
+        
+        # Create node traces
+        node_x = []
+        node_y = []
+        node_text = []
+        node_size = []
+        node_hover = []
+        
+        for node in G.nodes():
+            x, y = pos[node]
+            node_x.append(x)
+            node_y.append(y)
+            node_text.append(node)
+            
+            field_count = G.nodes[node].get('fields', 0)
+            node_size.append(max(40, field_count * 2))
+            
+            hover_text = f"<b>{node}</b><br>"
+            hover_text += f"Fields: {field_count}<br>"
+            hover_text += f"Connections: {len(list(G.neighbors(node)))}"
+            node_hover.append(hover_text)
+        
+        node_trace = go.Scatter(
+            x=node_x,
+            y=node_y,
+            mode='markers+text',
+            hoverinfo='text',
+            text=node_text,
+            hovertext=node_hover,
+            textposition="top center",
+            marker=dict(
+                size=node_size,
+                color='#9C27B0',
+                line=dict(width=2, color='white')
+            ),
+            textfont=dict(size=10, color='black')
+        )
+        
+        # Create figure
+        fig = go.Figure(data=[edge_trace, node_trace])
+        
+        fig.update_layout(
+            title={
+                'text': "📊 Entity Relationship Diagram<br><sub>Node size = field count | Click entity name in list below to view details</sub>",
+                'x': 0.5,
+                'xanchor': 'center'
+            },
+            showlegend=False,
+            hovermode='closest',
+            margin=dict(b=20, l=5, r=5, t=80),
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            plot_bgcolor='#f8f9fa',
+            height=600
+        )
+        
+        return fig
+        
+    except Exception as e:
+        st.error(f"Error creating ERD: {e}")
+        return None
+
+# ========================================================
+# FIELD LINEAGE DIAGRAM
+# ========================================================
+
+def create_field_lineage_diagram(entity_name, entity_df):
+    """
+    Create field-level lineage visualization
+    Shows: Source Field → [Transformation] → DW Column
+    """
+    
+    if not PLOTLY_AVAILABLE or entity_df is None or len(entity_df) == 0:
+        return None
+    
+    try:
+        # Detect column names
+        source_col = None
+        target_col = None
+        desc_col = None
+        
+        for col in entity_df.columns:
+            col_lower = col.lower()
+            
+            if not source_col and any(x in col_lower for x in ['source', 'field']) and 'dw' not in col_lower:
+                source_col = col
+            elif not target_col and any(x in col_lower for x in ['dw', 'warehouse', 'target', 'map']):
+                target_col = col
+            elif not desc_col and any(x in col_lower for x in ['desc', 'description']):
+                desc_col = col
+        
+        if not source_col or not target_col:
+            st.warning("⚠️ Could not detect source and target field columns")
+            st.write("Available columns:", list(entity_df.columns))
+            return None
+        
+        st.info(f"Using: **{source_col}** → **{target_col}**")
+        
+        # Create visualization
+        fig = go.Figure()
+        
+        num_fields = min(len(entity_df), 15)  # Show max 15
+        
+        for idx, (_, row) in enumerate(entity_df.head(15).iterrows()):
+            source_field = safe_get(row, source_col, f"Field_{idx}")
+            target_field = safe_get(row, target_col, f"DW_{idx}")
+            description = safe_get(row, desc_col, "") if desc_col else ""
+            
+            y_pos = 15 - idx
+            
+            # Source field (left)
+            fig.add_trace(go.Scatter(
+                x=[0],
+                y=[y_pos],
+                mode='markers+text',
+                marker=dict(size=35, color='#2196F3', line=dict(width=2, color='white')),
+                text=[source_field[:25]],
+                textposition="middle left",
+                textfont=dict(size=9),
+                hovertext=f"<b>Source:</b> {source_field}<br><b>Description:</b> {description}",
+                hoverinfo='text',
+                showlegend=False
+            ))
+            
+            # Target field (right)
+            fig.add_trace(go.Scatter(
+                x=[2],
+                y=[y_pos],
+                mode='markers+text',
+                marker=dict(size=35, color='#4CAF50', line=dict(width=2, color='white')),
+                text=[target_field[:25]],
+                textposition="middle right",
+                textfont=dict(size=9),
+                hovertext=f"<b>DW Column:</b> {target_field}",
+                hoverinfo='text',
+                showlegend=False
+            ))
+            
+            # Arrow
+            fig.add_annotation(
+                x=0.15, y=y_pos,
+                ax=1.85, ay=y_pos,
+                xref='x', yref='y',
+                axref='x', ayref='y',
+                showarrow=True,
+                arrowhead=2,
+                arrowsize=1,
+                arrowwidth=2,
+                arrowcolor='#888'
+            )
+        
+        fig.update_layout(
+            title=f"🔄 Field Lineage: {entity_name}",
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-0.8, 2.8]),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            height=max(500, num_fields * 40),
+            margin=dict(l=200, r=200, t=60, b=20),
+            plot_bgcolor='white'
+        )
+        
+        return fig
+        
+    except Exception as e:
+        st.error(f"Error creating field lineage: {e}")
+        return None
+
+# ========================================================
+# ENTITY EXPLORER UI
+# ========================================================
+
+def render_entity_explorer(entity_matrix_df, entity_models, selected_entity=None):
+    """
+    Main Entity Explorer UI
+    Can be called from main app or run standalone
+    
+    Args:
+        entity_matrix_df: DataFrame with entity matrix
+        entity_models: Dict of entity DataFrames
+        selected_entity: Optional - entity to show details for
+    """
+    
+    st.markdown("## 📚 Entity Model Explorer")
+    
+    if entity_matrix_df is None or not entity_models:
+        st.warning("⚠️ No entity models loaded. Upload Entity Model Reference file.")
+        return None
+    
+    # Tabs
+    tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Entity Detail", "🔎 Field Search"])
+    
+    with tab1:
+        st.subheader("Entity Relationship Diagram")
+        
+        with st.expander("ℹ️ How to use", expanded=False):
+            st.markdown("""
+            - **Hover** over nodes to see entity details
+            - **Larger nodes** = more fields
+            - **Connected nodes** = related entities
+            - **Click** entity name in list below to view details
+            """)
+        
+        # Generate ERD
+        erd_fig = create_entity_relationship_diagram(entity_matrix_df, entity_models)
+        if erd_fig:
+            st.plotly_chart(erd_fig, use_container_width=True)
+        
+        st.markdown("---")
+        
+        # Entity list
+        st.subheader(f"📋 All Entities ({len(entity_models)})")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        for idx, (entity_name, entity_df) in enumerate(sorted(entity_models.items())):
+            with [col1, col2, col3][idx % 3]:
+                with st.container():
+                    st.markdown(f"""
+                    <div style="background: white; padding: 1rem; border-radius: 10px; 
+                                border-left: 4px solid #9C27B0; margin: 0.5rem 0;
+                                box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                        <h4 style="margin: 0; color: #9C27B0;">{entity_name}</h4>
+                        <p style="margin: 0.5rem 0 0 0; color: #666;">
+                            {len(entity_df)} fields
+                        </p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    if st.button(f"View Details →", key=f"view_{entity_name}"):
+                        # Switch to Entity Detail tab
+                        return entity_name
+    
+    with tab2:
+        st.subheader("🔍 Entity Details")
+        
+        # Entity selector
+        entity_list = sorted(entity_models.keys())
+        
+        if selected_entity and selected_entity in entity_list:
+            default_idx = entity_list.index(selected_entity)
+        else:
+            default_idx = 0
+        
+        selected = st.selectbox(
+            "Select Entity:",
+            entity_list,
+            index=default_idx,
+            key="entity_selector"
+        )
+        
+        if selected:
+            entity_df = entity_models[selected]
+            
+            st.markdown(f"### 📊 {selected}")
+            st.write(f"**Total Fields:** {len(entity_df)}")
+            
+            # Field lineage diagram
+            st.markdown("#### 🔄 Field Lineage Visualization")
+            lineage_fig = create_field_lineage_diagram(selected, entity_df)
+            if lineage_fig:
+                st.plotly_chart(lineage_fig, use_container_width=True)
+            
+            st.markdown("---")
+            
+            # Field mapping table
+            st.markdown("#### 📋 Complete Field Mapping")
+            
+            # Display the dataframe
+            st.dataframe(
+                entity_df,
+                use_container_width=True,
+                height=400
+            )
+            
+            # Export option
+            col1, col2 = st.columns([1, 3])
+            with col1:
+                csv = entity_df.to_csv(index=False)
+                st.download_button(
+                    "📥 Export CSV",
+                    csv,
+                    f"{selected}_fields.csv",
+                    "text/csv"
+                )
+    
+    with tab3:
+        st.subheader("🔎 Field Search")
+        
+        st.write("Search across all entities for specific fields")
+        
+        search_term = st.text_input("Search for field name:", "")
+        
+        search_type = st.radio(
+            "Search in:",
+            ["Source Fields", "DW Columns", "Descriptions", "All"],
+            horizontal=True
+        )
+        
+        if search_term:
+            results = []
+            
+            for entity_name, entity_df in entity_models.items():
+                # Search based on type
+                matches = pd.DataFrame()
+                
+                for col in entity_df.columns:
+                    col_lower = col.lower()
+                    search_lower = search_term.lower()
+                    
+                    if search_type == "All" or \
+                       (search_type == "Source Fields" and 'source' in col_lower) or \
+                       (search_type == "DW Columns" and any(x in col_lower for x in ['dw', 'warehouse', 'target'])) or \
+                       (search_type == "Descriptions" and 'desc' in col_lower):
+                        
+                        mask = entity_df[col].astype(str).str.contains(search_lower, case=False, na=False)
+                        if mask.any():
+                            temp = entity_df[mask].copy()
+                            temp['Entity'] = entity_name
+                            results.append(temp)
+            
+            if results:
+                combined = pd.concat(results, ignore_index=True)
+                st.success(f"✅ Found {len(combined)} matches across {len(results)} entities")
+                
+                st.dataframe(combined, use_container_width=True, height=400)
+            else:
+                st.info(f"No matches found for '{search_term}'")
+    
+    return None
+
+# ========================================================
+# STANDALONE MODE
+# ========================================================
+
+if __name__ == "__main__":
+    st.set_page_config(
+        page_title="Entity Model Explorer",
+        page_icon="📚",
+        layout="wide"
+    )
+    
+    st.title("📚 Entity Model Explorer - Standalone")
+    
+    # File uploader
+    uploaded_file = st.file_uploader(
+        "Upload Entity Model Reference Excel",
+        type=['xlsx', 'xls'],
+        help="Excel file with Entity Matrix sheet and individual entity sheets"
+    )
+    
+    if uploaded_file:
+        # Load entity models
+        entity_matrix, entity_models = load_entity_model_reference(uploaded_file)
+        
+        if entity_matrix is not None and entity_models:
+            # Render explorer
+            selected = render_entity_explorer(entity_matrix, entity_models)
+            
+            # Handle entity selection (for standalone mode, just re-render)
+            if selected:
+                st.rerun()
+    else:
+        st.info("👆 Upload your Entity Model Reference Excel file to get started")
+        
+        with st.expander("📋 Expected File Format", expanded=True):
+            st.markdown("""
+            **Sheet 1: "Entity Matrix"**
+            - List of all entities/tables
+            - Optional: relationships between entities
+            
+            **Other Sheets: Individual Entity Models**
+            - Sheet name = Entity name (e.g., "Account", "Transaction")
+            - Columns should include:
+              - Source field names
+              - Field descriptions
+              - Data warehouse column names
+              
+            **Example:**
+            ```
+            Sheet: Account
+            | Source Field    | Field Description          | DW Column Name |
+            |-----------------|----------------------------|----------------|
+            | ACCOUNT_NUMBER  | Unique account identifier  | ACCOUNT_NUMBER |
+            | CUSTOMER_NAME   | Customer full name         | CUSTOMER_NAME  |
+            ```
+            """)
