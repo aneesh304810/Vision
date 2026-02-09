@@ -1,0 +1,498 @@
+"""
+========================================================
+COMPLETE END-TO-END LINEAGE VIEWER
+========================================================
+Shows complete data flow:
+SEI → AddVantage → Entity (DWH)
+
+Three-way matching:
+1. SEI fields (field_name, field_description)
+2. AddVantage fields (metadata)
+3. Entity models (source fields, descriptions, DW columns)
+========================================================
+"""
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+
+try:
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except:
+    PLOTLY_AVAILABLE = False
+
+# ========================================================
+# COMPLETE LINEAGE BUILDER
+# ========================================================
+
+def build_complete_lineage(sei_matched_df, entity_addv_matched_df, entity_models):
+    """
+    Build complete end-to-end lineage:
+    SEI → AddVantage → Entity (DWH)
+    
+    Returns DataFrame with complete mapping
+    """
+    
+    st.info("🔄 Building complete end-to-end lineage...")
+    
+    if sei_matched_df is None or entity_addv_matched_df is None:
+        return None
+    
+    # Build lineage records
+    lineage_records = []
+    
+    # For each SEI field
+    for _, sei_row in sei_matched_df.iterrows():
+        # SEI information
+        sei_interface = sei_row.get('interface_name', '')
+        sei_field = sei_row.get('field_name', '')
+        sei_desc = sei_row.get('field_description', '')
+        sei_type = sei_row.get('data_type', '')
+        
+        # AddVantage match from SEI
+        addv_field = sei_row.get('matched_addv_field', '')
+        addv_file = sei_row.get('matched_addv_file', '')
+        addv_type = sei_row.get('matched_addv_type', '')
+        sei_addv_score = sei_row.get('match_score', 0)
+        sei_addv_confidence = sei_row.get('match_confidence', 'Unmatched')
+        sei_addv_method = sei_row.get('match_type', '')
+        
+        # Find Entity match for this AddVantage field
+        entity_name = ''
+        entity_source_field = ''
+        entity_description = ''
+        entity_dw_column = ''
+        addv_entity_score = 0
+        addv_entity_confidence = 'Unmatched'
+        
+        if addv_field:
+            # Look for this AddVantage field in entity matches
+            mask = entity_addv_matched_df['field_name'].str.lower() == addv_field.lower()
+            if mask.any():
+                entity_match = entity_addv_matched_df[mask].iloc[0]
+                
+                entity_name = entity_match.get('matched_entity', '')
+                entity_source_field = entity_match.get('matched_source_field', '')
+                addv_entity_score = entity_match.get('match_score', 0)
+                addv_entity_confidence = entity_match.get('match_confidence', 'Unmatched')
+                
+                # Get entity description and DW column from entity models
+                if entity_name and entity_name in entity_models:
+                    entity_df = entity_models[entity_name]
+                    
+                    # Find source column
+                    source_col = None
+                    desc_col = None
+                    dw_col = None
+                    
+                    for col in entity_df.columns:
+                        col_lower = col.lower()
+                        if not source_col and 'source' in col_lower and 'field' in col_lower:
+                            source_col = col
+                        if not desc_col and 'desc' in col_lower:
+                            desc_col = col
+                        if not dw_col and any(x in col_lower for x in ['dw', 'warehouse', 'target']):
+                            dw_col = col
+                    
+                    # Find the row for this field
+                    if source_col and entity_source_field:
+                        entity_field_mask = entity_df[source_col].str.lower() == entity_source_field.lower()
+                        if entity_field_mask.any():
+                            entity_field_row = entity_df[entity_field_mask].iloc[0]
+                            
+                            if desc_col:
+                                entity_description = entity_field_row.get(desc_col, '')
+                            if dw_col:
+                                entity_dw_column = entity_field_row.get(dw_col, '')
+        
+        # Build complete lineage record
+        lineage_records.append({
+            # SEI
+            'sei_interface': sei_interface,
+            'sei_field': sei_field,
+            'sei_description': sei_desc,
+            'sei_type': sei_type,
+            
+            # AddVantage
+            'addv_field': addv_field,
+            'addv_file': addv_file,
+            'addv_type': addv_type,
+            
+            # Entity
+            'entity_name': entity_name,
+            'entity_source_field': entity_source_field,
+            'entity_description': entity_description,
+            'entity_dw_column': entity_dw_column,
+            
+            # Match quality
+            'sei_to_addv_score': sei_addv_score,
+            'sei_to_addv_confidence': sei_addv_confidence,
+            'sei_to_addv_method': sei_addv_method,
+            'addv_to_entity_score': addv_entity_score,
+            'addv_to_entity_confidence': addv_entity_confidence,
+            
+            # Overall completeness
+            'complete_lineage': 'Yes' if (addv_field and entity_name) else 'Partial' if addv_field else 'No'
+        })
+    
+    lineage_df = pd.DataFrame(lineage_records)
+    
+    st.success(f"✅ Built {len(lineage_df)} complete lineage records")
+    
+    return lineage_df
+
+# ========================================================
+# COMPLETE LINEAGE VISUALIZATION
+# ========================================================
+
+def create_complete_lineage_diagram(lineage_df, selected_interface=None, max_fields=10):
+    """
+    Create 3-level lineage visualization:
+    SEI Field → AddVantage Field → Entity DWH Field
+    """
+    
+    if not PLOTLY_AVAILABLE:
+        return None
+    
+    try:
+        # Filter by interface if specified
+        if selected_interface:
+            df = lineage_df[lineage_df['sei_interface'] == selected_interface]
+        else:
+            df = lineage_df
+        
+        # Take first N with complete lineage
+        df_complete = df[df['complete_lineage'] == 'Yes'].head(max_fields)
+        if len(df_complete) == 0:
+            df_complete = df.head(max_fields)
+        
+        if len(df_complete) == 0:
+            return None
+        
+        fig = go.Figure()
+        
+        num_fields = len(df_complete)
+        
+        for idx, (_, row) in enumerate(df_complete.iterrows()):
+            y = num_fields - idx
+            
+            # Level 1: SEI Field (left)
+            sei_field = row['sei_field']
+            sei_desc = row['sei_description'][:50] if row['sei_description'] else ''
+            sei_interface = row['sei_interface']
+            
+            fig.add_trace(go.Scatter(
+                x=[0], y=[y],
+                mode='markers+text',
+                marker=dict(size=40, color='#FF6B6B', line=dict(width=2, color='white')),
+                text=[sei_field[:15]],
+                textposition="middle left",
+                textfont=dict(size=9, color='black'),
+                hovertext=f"<b>SEI Field:</b> {sei_field}<br><b>Interface:</b> {sei_interface}<br><b>Description:</b> {sei_desc}",
+                hoverinfo='text',
+                showlegend=False
+            ))
+            
+            # Level 2: AddVantage Field (middle)
+            addv_field = row['addv_field']
+            addv_file = row['addv_file']
+            addv_type = row['addv_type']
+            sei_addv_conf = row['sei_to_addv_confidence']
+            
+            if addv_field:
+                # Color based on SEI→AddV confidence
+                if sei_addv_conf == 'High':
+                    addv_color = '#4CAF50'
+                elif sei_addv_conf == 'Medium':
+                    addv_color = '#FFC107'
+                elif sei_addv_conf == 'Low':
+                    addv_color = '#FF9800'
+                else:
+                    addv_color = '#9E9E9E'
+                
+                fig.add_trace(go.Scatter(
+                    x=[1.5], y=[y],
+                    mode='markers+text',
+                    marker=dict(size=40, color=addv_color, line=dict(width=2, color='white')),
+                    text=[addv_field[:15]],
+                    textposition="top center",
+                    textfont=dict(size=8, color='black'),
+                    hovertext=f"<b>AddVantage:</b> {addv_field}<br><b>File:</b> {addv_file}<br><b>Type:</b> {addv_type}<br><b>Confidence:</b> {sei_addv_conf}",
+                    hoverinfo='text',
+                    showlegend=False
+                ))
+                
+                # Arrow SEI → AddV
+                fig.add_annotation(
+                    x=0.2, y=y, ax=1.3, ay=y,
+                    showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=2,
+                    arrowcolor=addv_color
+                )
+            
+            # Level 3: Entity DWH Field (right)
+            entity_source = row['entity_source_field']
+            entity_dw = row['entity_dw_column']
+            entity_name = row['entity_name']
+            entity_desc = row['entity_description'][:50] if row['entity_description'] else ''
+            addv_entity_conf = row['addv_to_entity_confidence']
+            
+            if entity_dw or entity_source:
+                # Color based on AddV→Entity confidence
+                if addv_entity_conf == 'High':
+                    entity_color = '#9C27B0'
+                elif addv_entity_conf == 'Medium':
+                    entity_color = '#BA68C8'
+                elif addv_entity_conf == 'Low':
+                    entity_color = '#CE93D8'
+                else:
+                    entity_color = '#E1BEE7'
+                
+                display_text = entity_dw[:15] if entity_dw else entity_source[:15]
+                
+                fig.add_trace(go.Scatter(
+                    x=[3], y=[y],
+                    mode='markers+text',
+                    marker=dict(size=40, color=entity_color, line=dict(width=2, color='white')),
+                    text=[display_text],
+                    textposition="middle right",
+                    textfont=dict(size=9, color='black'),
+                    hovertext=f"<b>Entity:</b> {entity_name}<br><b>Source:</b> {entity_source}<br><b>DW Column:</b> {entity_dw}<br><b>Description:</b> {entity_desc}",
+                    hoverinfo='text',
+                    showlegend=False
+                ))
+                
+                # Arrow AddV → Entity
+                if addv_field:
+                    fig.add_annotation(
+                        x=1.7, y=y, ax=2.8, ay=y,
+                        showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=2,
+                        arrowcolor=entity_color
+                    )
+        
+        title_text = f"🔄 Complete Lineage: {selected_interface}" if selected_interface else "🔄 Complete End-to-End Lineage (SEI → AddVantage → Entity DWH)"
+        
+        fig.update_layout(
+            title=title_text,
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-0.8, 3.8]),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            height=max(600, num_fields * 60),
+            margin=dict(l=200, r=200, t=80, b=20),
+            plot_bgcolor='white'
+        )
+        
+        return fig
+        
+    except Exception as e:
+        st.error(f"Error creating lineage diagram: {e}")
+        return None
+
+# ========================================================
+# COMPLETE LINEAGE VIEWER UI
+# ========================================================
+
+def render_complete_lineage_viewer(lineage_df):
+    """
+    Render complete end-to-end lineage viewer
+    SEI → AddVantage → Entity (DWH)
+    """
+    
+    if lineage_df is None or len(lineage_df) == 0:
+        st.warning("⚠️ No lineage data available")
+        return
+    
+    st.markdown("## 🔄 Complete End-to-End Lineage")
+    st.markdown("### SEI → AddVantage → Entity (DWH)")
+    
+    # Tabs
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Overview", "🔍 Complete Lineage", "📋 By Interface", "🔎 Search"])
+    
+    with tab1:
+        st.subheader("Lineage Completeness Overview")
+        
+        # Metrics
+        col1, col2, col3, col4 = st.columns(4)
+        
+        total = len(lineage_df)
+        complete = len(lineage_df[lineage_df['complete_lineage'] == 'Yes'])
+        partial = len(lineage_df[lineage_df['complete_lineage'] == 'Partial'])
+        incomplete = len(lineage_df[lineage_df['complete_lineage'] == 'No'])
+        
+        with col1:
+            st.metric("Total SEI Fields", total)
+        with col2:
+            st.metric("Complete Lineage", complete, f"{complete/total*100:.1f}%")
+        with col3:
+            st.metric("Partial Lineage", partial, f"{partial/total*100:.1f}%")
+        with col4:
+            st.metric("No Lineage", incomplete, f"{incomplete/total*100:.1f}%")
+        
+        st.markdown("---")
+        
+        # Lineage quality
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("Lineage Completeness")
+            st.success(f"🟢 **Complete (SEI→AddV→Entity):** {complete} ({complete/total*100:.1f}%)")
+            st.warning(f"🟡 **Partial (SEI→AddV only):** {partial} ({partial/total*100:.1f}%)")
+            st.error(f"⚫ **Incomplete (no matches):** {incomplete} ({incomplete/total*100:.1f}%)")
+        
+        with col2:
+            st.subheader("Match Quality")
+            
+            # SEI to AddV quality
+            sei_high = len(lineage_df[lineage_df['sei_to_addv_confidence'] == 'High'])
+            st.write(f"**SEI → AddVantage:**")
+            st.write(f"  High confidence: {sei_high} ({sei_high/total*100:.1f}%)")
+            
+            # AddV to Entity quality
+            entity_high = len(lineage_df[lineage_df['addv_to_entity_confidence'] == 'High'])
+            st.write(f"**AddVantage → Entity:**")
+            st.write(f"  High confidence: {entity_high} ({entity_high/total*100:.1f}%)")
+    
+    with tab2:
+        st.subheader("Complete Lineage Details")
+        
+        # Filters
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            lineage_filter = st.selectbox(
+                "Lineage Completeness:",
+                ["All", "Complete Only", "Partial Only", "Incomplete Only"]
+            )
+        
+        with col2:
+            if 'sei_interface' in lineage_df.columns:
+                interfaces = ["All Interfaces"] + sorted(lineage_df['sei_interface'].unique().tolist())
+                interface_filter = st.selectbox("Filter by Interface:", interfaces)
+            else:
+                interface_filter = "All Interfaces"
+        
+        with col3:
+            if 'entity_name' in lineage_df.columns:
+                entities = ["All Entities"] + sorted([e for e in lineage_df['entity_name'].unique() if e])
+                entity_filter = st.selectbox("Filter by Entity:", entities)
+            else:
+                entity_filter = "All Entities"
+        
+        # Apply filters
+        filtered = lineage_df.copy()
+        
+        if lineage_filter == "Complete Only":
+            filtered = filtered[filtered['complete_lineage'] == 'Yes']
+        elif lineage_filter == "Partial Only":
+            filtered = filtered[filtered['complete_lineage'] == 'Partial']
+        elif lineage_filter == "Incomplete Only":
+            filtered = filtered[filtered['complete_lineage'] == 'No']
+        
+        if interface_filter != "All Interfaces":
+            filtered = filtered[filtered['sei_interface'] == interface_filter]
+        
+        if entity_filter != "All Entities":
+            filtered = filtered[filtered['entity_name'] == entity_filter]
+        
+        st.write(f"Showing {len(filtered)} of {len(lineage_df)} records")
+        
+        # Display complete lineage table
+        display_cols = [
+            'sei_interface',
+            'sei_field',
+            'sei_description',
+            'addv_field',
+            'addv_file',
+            'entity_name',
+            'entity_source_field',
+            'entity_description',
+            'entity_dw_column',
+            'sei_to_addv_confidence',
+            'addv_to_entity_confidence',
+            'complete_lineage'
+        ]
+        
+        display_cols = [c for c in display_cols if c in filtered.columns]
+        
+        # Rename for clarity
+        display_df = filtered[display_cols].copy()
+        rename_map = {
+            'sei_interface': 'SEI Interface',
+            'sei_field': 'SEI Field',
+            'sei_description': 'SEI Description',
+            'addv_field': 'AddVantage Field',
+            'addv_file': 'AddV File',
+            'entity_name': 'Entity',
+            'entity_source_field': 'Entity Source',
+            'entity_description': 'Entity Description',
+            'entity_dw_column': 'DWH Column',
+            'sei_to_addv_confidence': 'SEI→AddV',
+            'addv_to_entity_confidence': 'AddV→Entity',
+            'complete_lineage': 'Lineage'
+        }
+        display_df = display_df.rename(columns={k: v for k, v in rename_map.items() if k in display_df.columns})
+        
+        st.dataframe(display_df, use_container_width=True, height=500)
+        
+        # Export
+        csv = filtered.to_csv(index=False)
+        st.download_button(
+            "📥 Export Complete Lineage",
+            csv,
+            "complete_lineage_sei_addv_entity.csv",
+            "text/csv"
+        )
+    
+    with tab3:
+        st.subheader("Lineage by Interface")
+        
+        if 'sei_interface' not in lineage_df.columns:
+            st.warning("Interface column not found")
+            return
+        
+        interfaces = sorted(lineage_df['sei_interface'].unique())
+        selected = st.selectbox("Select Interface:", interfaces, key="lineage_interface_select")
+        
+        if selected:
+            interface_data = lineage_df[lineage_df['sei_interface'] == selected]
+            
+            # Stats
+            complete_count = len(interface_data[interface_data['complete_lineage'] == 'Yes'])
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Fields", len(interface_data))
+            col2.metric("Complete Lineage", complete_count, f"{complete_count/len(interface_data)*100:.1f}%")
+            col3.metric("Partial", len(interface_data) - complete_count)
+            
+            # Visual lineage
+            st.markdown("### Visual Lineage")
+            fig = create_complete_lineage_diagram(lineage_df, selected, max_fields=15)
+            if fig:
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Table
+            st.markdown("### Complete Data")
+            st.dataframe(interface_data, use_container_width=True)
+    
+    with tab4:
+        st.subheader("🔎 Search Across Lineage")
+        
+        search_term = st.text_input("Search in any field (SEI, AddVantage, Entity):")
+        
+        if search_term:
+            search_lower = search_term.lower()
+            
+            mask = pd.Series([False] * len(lineage_df))
+            
+            # Search all text columns
+            text_cols = ['sei_field', 'sei_description', 'addv_field', 'entity_source_field', 'entity_description', 'entity_dw_column']
+            for col in text_cols:
+                if col in lineage_df.columns:
+                    mask |= lineage_df[col].astype(str).str.lower().str.contains(search_lower, na=False)
+            
+            results = lineage_df[mask]
+            
+            if len(results) > 0:
+                st.success(f"✅ Found {len(results)} matches")
+                st.dataframe(results, use_container_width=True)
+            else:
+                st.info(f"No matches found for '{search_term}'")
