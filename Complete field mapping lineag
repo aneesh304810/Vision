@@ -453,8 +453,39 @@ def match_sei_to_addvantage(sei_df, addv_df, entity_models=None, min_score=60, u
         if best_idx is not None and best_score >= min_score:
             matched += 1
             addv_match = addv_df.iloc[best_idx]
+            addv_field_name = safe_get(addv_match, 'field_name')
             
-            row['matched_addv_field'] = safe_get(addv_match, 'field_name')
+            # Get AddVantage field description from entity model
+            addv_field_desc = ''
+            if entity_models and addv_field_name:
+                for entity_name, entity_df in entity_models.items():
+                    source_col = None
+                    desc_col = None
+                    
+                    for col in entity_df.columns:
+                        col_lower = col.lower()
+                        if not source_col and 'source' in col_lower and 'field' in col_lower:
+                            source_col = col
+                        if not desc_col and col_lower == 'field_description':
+                            desc_col = col
+                    
+                    if source_col and desc_col:
+                        for _, entity_row in entity_df.iterrows():
+                            entity_field = safe_get(entity_row, source_col, '')
+                            if entity_field and (
+                                normalize_text(entity_field) == normalize_text(addv_field_name) or
+                                normalize_text(addv_field_name) in normalize_text(entity_field) or
+                                normalize_text(entity_field) in normalize_text(addv_field_name)
+                            ):
+                                addv_field_desc = safe_get(entity_row, desc_col, '')
+                                if addv_field_desc:
+                                    break
+                    
+                    if addv_field_desc:
+                        break
+            
+            row['matched_addv_field'] = addv_field_name
+            row['matched_addv_description'] = addv_field_desc
             row['matched_addv_file'] = safe_get(addv_match, 'file_clean')
             row['matched_addv_type'] = safe_get(addv_match, 'data_type')
             row['matched_addv_length'] = safe_get(addv_match, 'max_length')
@@ -464,6 +495,7 @@ def match_sei_to_addvantage(sei_df, addv_df, entity_models=None, min_score=60, u
         else:
             # Unmatched - keep with empty values
             row['matched_addv_field'] = ''
+            row['matched_addv_description'] = ''
             row['matched_addv_file'] = ''
             row['matched_addv_type'] = ''
             row['matched_addv_length'] = ''
@@ -733,6 +765,7 @@ def render_sei_field_mapping_viewer(matched_df):
             'field_description',  # SEI description
             'data_type',  # SEI data type
             'matched_addv_field',  # AddVantage field
+            'matched_addv_description',  # AddVantage description from entity
             'matched_addv_file',  # AddVantage file
             'matched_addv_type',  # AddVantage type
             'match_score',  # Score
@@ -751,6 +784,7 @@ def render_sei_field_mapping_viewer(matched_df):
             'field_description': 'SEI Description',
             'data_type': 'SEI Type',
             'matched_addv_field': 'AddVantage Field',
+            'matched_addv_description': 'AddVantage Description',
             'matched_addv_file': 'AddVantage File',
             'matched_addv_type': 'AddV Type',
             'match_score': 'Score',
@@ -810,6 +844,7 @@ def render_sei_field_mapping_viewer(matched_df):
                 'field_name',
                 'field_description',
                 'matched_addv_field',
+                'matched_addv_description',
                 'matched_addv_file',
                 'match_score',
                 'match_type',
@@ -859,6 +894,7 @@ def render_sei_field_mapping_viewer(matched_df):
                     'field_name',
                     'field_description',
                     'matched_addv_field',
+                    'matched_addv_description',
                     'matched_addv_file',
                     'match_score',
                     'match_type',
