@@ -1,0 +1,802 @@
+"""
+========================================================
+FIELD MAPPING VIEWER - AddVantage Feed Analysis
+========================================================
+Features:
+- Load AddVantage feed file field mappings
+- Semantic matching with Entity Model source fields
+- Clean file names (remove timestamps)
+- Show data types, max lengths, null percentages
+- Keep unmatched fields (don't disregard)
+- Visual field lineage
+
+Columns in input:
+- file: Feed file name (may have timestamps)
+- field_name: Field in AddVantage feed
+- data_type: Data type
+- max_length: Maximum length
+- null_percentage: % of null values
+- row_count: Number of rows
+
+Matches with Entity Model Reference source fields
+========================================================
+"""
+
+import streamlit as st
+import pandas as pd
+import re
+import numpy as np
+
+# ML for semantic matching
+try:
+    from sentence_transformers import SentenceTransformer, util
+    import torch
+    ML_AVAILABLE = True
+except:
+    ML_AVAILABLE = False
+
+# Visualization
+try:
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except:
+    PLOTLY_AVAILABLE = False
+
+# ========================================================
+# UTILITY FUNCTIONS
+# ========================================================
+
+def clean_column_name(col):
+    """Clean column names for consistent access"""
+    return str(col).strip().lower().replace(" ", "_").replace("/", "_").replace("-", "_").replace("(", "").replace(")", "").strip("_")
+
+def safe_get(row, column, default=""):
+    """Safely get value from row"""
+    try:
+        val = row.get(column, default) if isinstance(row, dict) else getattr(row, column, default)
+        return val if pd.notna(val) and str(val) != 'nan' and str(val) != '' else default
+    except:
+        return default
+
+def normalize_text(text):
+    """Normalize text for matching"""
+    if not isinstance(text, str):
+        return ""
+    return text.lower().replace("_", "").replace(" ", "").replace("-", "").strip()
+
+def clean_file_name(file_name):
+    """
+    Remove timestamps from file names
+    
+    Examples:
+    customer_feed_20240115.dat → customer_feed.dat
+    account_extract_2024_01_15.csv → account_extract.csv
+    transaction_20240115_093045.txt → transaction.txt
+    """
+    if not isinstance(file_name, str):
+        return file_name
+    
+    # Pattern 1: Remove _YYYYMMDD
+    cleaned = re.sub(r'_\d{8}', '', file_name)
+    
+    # Pattern 2: Remove _YYYY_MM_DD
+    cleaned = re.sub(r'_\d{4}_\d{2}_\d{2}', '', cleaned)
+    
+    # Pattern 3: Remove _YYYYMMDD_HHMMSS
+    cleaned = re.sub(r'_\d{8}_\d{6}', '', cleaned)
+    
+    # Pattern 4: Remove -YYYYMMDD
+    cleaned = re.sub(r'-\d{8}', '', cleaned)
+    
+    # Pattern 5: Remove YYYYMMDD at start
+    cleaned = re.sub(r'^\d{8}_', '', cleaned)
+    
+    return cleaned
+
+# ========================================================
+# LOAD ADDVANTAGE FIELD MAPPING
+# ========================================================
+
+def load_addvantage_field_mapping(file):
+    """
+    Load AddVantage feed file field mapping
+    
+    Expected columns:
+    - file: Feed file name
+    - field_name: Field name in feed
+    - data_type: Data type
+    - max_length: Maximum length
+    - null_percentage: % nulls
+    - row_count: Row count
+    
+    Returns DataFrame with cleaned data
+    """
+    
+    st.info("📁 Loading AddVantage Field Mapping...")
+    
+    try:
+        # Try to read - could be any sheet name
+        excel_file = pd.ExcelFile(file)
+        sheet_names = excel_file.sheet_names
+        
+        st.write(f"✅ Found {len(sheet_names)} sheet(s): {', '.join(sheet_names)}")
+        
+        # Read first sheet (or specify if you know the name)
+        df = pd.read_excel(file, sheet_name=0)
+        
+        st.write(f"✅ Loaded {len(df)} field mappings from first sheet")
+        
+        # Clean column names
+        df.columns = [clean_column_name(col) for col in df.columns]
+        
+        # Show detected columns
+        with st.expander("📋 Columns Detected", expanded=False):
+            st.write("Columns found:", list(df.columns))
+            st.write("Expected: file, field_name, data_type, max_length, null_percentage, row_count")
+        
+        # Verify required columns
+        required = ['file', 'field_name']
+        missing = [col for col in required if col not in df.columns]
+        
+        if missing:
+            st.error(f"❌ Missing required columns: {missing}")
+            return None
+        
+        # Clean file names (remove timestamps)
+        if 'file' in df.columns:
+            df['file_clean'] = df['file'].apply(clean_file_name)
+            df['file_original'] = df['file']
+            
+            # Show examples
+            with st.expander("🧹 File Name Cleaning Examples", expanded=False):
+                examples = df[['file_original', 'file_clean']].drop_duplicates().head(10)
+                st.dataframe(examples)
+        
+        # Handle optional columns with defaults
+        if 'data_type' not in df.columns:
+            df['data_type'] = ''
+        if 'max_length' not in df.columns:
+            df['max_length'] = np.nan
+        if 'null_percentage' not in df.columns:
+            df['null_percentage'] = np.nan
+        if 'row_count' not in df.columns:
+            df['row_count'] = np.nan
+        
+        # Clean data
+        df['field_name'] = df['field_name'].astype(str).str.strip()
+        df['data_type'] = df['data_type'].astype(str).str.strip()
+        
+        st.success(f"✅ **Loaded {len(df)} AddVantage fields from {df['file_clean'].nunique()} files**")
+        
+        return df
+        
+    except Exception as e:
+        st.error(f"❌ Error loading field mapping: {e}")
+        return None
+
+# ========================================================
+# SEMANTIC FIELD MATCHING
+# ========================================================
+
+def match_fields_to_entity_models(addvantage_df, entity_models, min_score=60, use_semantic=True):
+    """
+    Match AddVantage fields to Entity Model source fields
+    
+    Uses:
+    1. Exact name matching
+    2. Semantic similarity matching (if enabled)
+    
+    IMPORTANT: Keep ALL AddVantage fields, even if no match found
+    Set matched columns to empty for unmatched fields
+    
+    Returns DataFrame with matched information added
+    """
+    
+    st.info("🔄 Matching AddVantage fields to Entity Models...")
+    
+    if not entity_models:
+        st.warning("⚠️ No entity models loaded. Skipping matching.")
+        return addvantage_df
+    
+    # Initialize embedding model if semantic matching enabled
+    embedding_model = None
+    if use_semantic and ML_AVAILABLE:
+        try:
+            st.write("Loading embedding model for semantic matching...")
+            embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+            st.success("✅ Embedding model loaded")
+        except Exception as e:
+            st.warning(f"⚠️ Could not load embedding model: {e}")
+    
+    # Prepare results
+    results = []
+    
+    # Build entity field index for matching
+    entity_field_index = []
+    
+    for entity_name, entity_df in entity_models.items():
+        # Find source field column
+        source_col = None
+        for col in entity_df.columns:
+            if any(x in col.lower() for x in ['source', 'field']) and 'dw' not in col.lower():
+                source_col = col
+                break
+        
+        if source_col:
+            for _, row in entity_df.iterrows():
+                source_field = safe_get(row, source_col)
+                if source_field:
+                    entity_field_index.append({
+                        'entity': entity_name,
+                        'source_field': source_field,
+                        'source_field_normalized': normalize_text(source_field),
+                        'entity_row': row
+                    })
+    
+    st.write(f"Built index with {len(entity_field_index)} entity source fields")
+    
+    # Pre-compute embeddings if using semantic matching
+    addv_embeddings = None
+    entity_embeddings = None
+    
+    if use_semantic and embedding_model:
+        st.write("📊 Pre-computing embeddings for fast matching...")
+        
+        try:
+            # AddVantage field embeddings
+            addv_texts = addvantage_df['field_name'].tolist()
+            addv_embeddings = embedding_model.encode(addv_texts, batch_size=32, show_progress_bar=False, convert_to_numpy=True)
+            
+            # Entity field embeddings
+            entity_texts = [item['source_field'] for item in entity_field_index]
+            entity_embeddings = embedding_model.encode(entity_texts, batch_size=32, show_progress_bar=False, convert_to_numpy=True)
+            
+            st.success("✅ Embeddings pre-computed!")
+        except Exception as e:
+            st.warning(f"⚠️ Embedding error: {e}")
+            addv_embeddings = None
+    
+    # Match each AddVantage field
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    total = len(addvantage_df)
+    matched_count = 0
+    
+    for idx, (_, addv_row) in enumerate(addvantage_df.iterrows()):
+        if idx % 100 == 0:
+            progress_bar.progress((idx + 1) / total)
+            status_text.text(f"Matching field {idx + 1} of {total}... (Found {matched_count} matches)")
+        
+        addv_field = safe_get(addv_row, 'field_name')
+        addv_field_norm = normalize_text(addv_field)
+        
+        best_match = None
+        best_score = 0
+        
+        # Try to find matches
+        for ent_idx, entity_item in enumerate(entity_field_index):
+            score = 0
+            
+            # Exact match
+            if addv_field_norm == entity_item['source_field_normalized']:
+                score = 100
+            
+            # Partial match
+            elif addv_field_norm in entity_item['source_field_normalized'] or entity_item['source_field_normalized'] in addv_field_norm:
+                score = 80
+            
+            # Semantic match
+            elif use_semantic and addv_embeddings is not None:
+                try:
+                    similarity = np.dot(addv_embeddings[idx], entity_embeddings[ent_idx])
+                    
+                    if similarity >= 0.85:
+                        score = max(score, 90)
+                    elif similarity >= 0.75:
+                        score = max(score, 75)
+                    elif similarity >= 0.65:
+                        score = max(score, 65)
+                except:
+                    pass
+            
+            if score > best_score:
+                best_score = score
+                best_match = entity_item
+        
+        # Build result row - KEEP ALL FIELDS
+        result_row = addv_row.to_dict()
+        
+        if best_match and best_score >= min_score:
+            # Matched!
+            matched_count += 1
+            result_row['matched_entity'] = best_match['entity']
+            result_row['matched_source_field'] = best_match['source_field']
+            result_row['match_score'] = best_score
+            result_row['match_confidence'] = 'High' if best_score >= 85 else 'Medium' if best_score >= 70 else 'Low'
+            
+            # Get DW column if available
+            entity_row = best_match['entity_row']
+            for col in entity_row.index:
+                if any(x in col.lower() for x in ['dw', 'warehouse', 'target']):
+                    result_row['matched_dw_column'] = safe_get(entity_row, col)
+                    break
+        else:
+            # NO MATCH - Keep field but mark as unmatched
+            result_row['matched_entity'] = ''
+            result_row['matched_source_field'] = ''
+            result_row['match_score'] = 0
+            result_row['match_confidence'] = 'Unmatched'
+            result_row['matched_dw_column'] = ''
+        
+        results.append(result_row)
+    
+    progress_bar.empty()
+    status_text.empty()
+    
+    # Create results DataFrame
+    result_df = pd.DataFrame(results)
+    
+    # Summary
+    unmatched_count = total - matched_count
+    
+    st.success(f"""
+    ✅ **Matching Complete!**
+    - Total AddVantage Fields: {total}
+    - Matched to Entity Models: {matched_count} ({matched_count/total*100:.1f}%)
+    - Unmatched (kept in results): {unmatched_count} ({unmatched_count/total*100:.1f}%)
+    """)
+    
+    return result_df
+
+# ========================================================
+# FIELD LINEAGE VISUALIZATION
+# ========================================================
+
+def create_field_mapping_diagram(matched_df, selected_file=None):
+    """
+    Create visual diagram showing:
+    AddVantage Field → Entity Source Field → DW Column
+    
+    For a specific file or all fields
+    """
+    
+    if not PLOTLY_AVAILABLE:
+        return None
+    
+    try:
+        # Filter by file if specified
+        if selected_file:
+            df = matched_df[matched_df['file_clean'] == selected_file]
+        else:
+            df = matched_df.head(20)  # Show first 20 for overview
+        
+        if len(df) == 0:
+            return None
+        
+        fig = go.Figure()
+        
+        num_fields = min(len(df), 15)
+        
+        for idx, (_, row) in enumerate(df.head(15).iterrows()):
+            addv_field = safe_get(row, 'field_name', f'Field_{idx}')
+            entity_field = safe_get(row, 'matched_source_field', '')
+            dw_column = safe_get(row, 'matched_dw_column', '')
+            confidence = safe_get(row, 'match_confidence', 'Unmatched')
+            data_type = safe_get(row, 'data_type', '')
+            max_len = safe_get(row, 'max_length', '')
+            
+            y_pos = 15 - idx
+            
+            # Left: AddVantage Feed Field
+            addv_color = '#2196F3'
+            fig.add_trace(go.Scatter(
+                x=[0],
+                y=[y_pos],
+                mode='markers+text',
+                marker=dict(size=35, color=addv_color, line=dict(width=2, color='white')),
+                text=[addv_field[:20]],
+                textposition="middle left",
+                textfont=dict(size=9),
+                hovertext=f"<b>AddVantage Field:</b> {addv_field}<br><b>Type:</b> {data_type}<br><b>Max Length:</b> {max_len}",
+                hoverinfo='text',
+                showlegend=False
+            ))
+            
+            # Middle: Entity Source Field (if matched)
+            if entity_field:
+                match_color = '#4CAF50' if confidence == 'High' else '#FFC107' if confidence == 'Medium' else '#FF9800'
+                fig.add_trace(go.Scatter(
+                    x=[1.5],
+                    y=[y_pos],
+                    mode='markers+text',
+                    marker=dict(size=30, color=match_color, line=dict(width=2, color='white')),
+                    text=[entity_field[:20]],
+                    textposition="top center",
+                    textfont=dict(size=8),
+                    hovertext=f"<b>Entity Source:</b> {entity_field}<br><b>Confidence:</b> {confidence}",
+                    hoverinfo='text',
+                    showlegend=False
+                ))
+                
+                # Arrow to entity field
+                fig.add_annotation(
+                    x=0.15, y=y_pos,
+                    ax=1.35, ay=y_pos,
+                    showarrow=True,
+                    arrowhead=2,
+                    arrowsize=1,
+                    arrowwidth=2,
+                    arrowcolor=match_color
+                )
+            else:
+                # Unmatched - show in gray
+                fig.add_trace(go.Scatter(
+                    x=[1.5],
+                    y=[y_pos],
+                    mode='markers+text',
+                    marker=dict(size=30, color='#9E9E9E', line=dict(width=2, color='white')),
+                    text=['No Match'],
+                    textposition="top center",
+                    textfont=dict(size=8),
+                    hovertext="<b>No matching entity field found</b>",
+                    hoverinfo='text',
+                    showlegend=False
+                ))
+                
+                # Dotted arrow for unmatched
+                fig.add_annotation(
+                    x=0.15, y=y_pos,
+                    ax=1.35, ay=y_pos,
+                    showarrow=True,
+                    arrowhead=1,
+                    arrowsize=1,
+                    arrowwidth=1,
+                    arrowcolor='#CCCCCC',
+                    opacity=0.5
+                )
+            
+            # Right: DW Column (if available)
+            if dw_column:
+                fig.add_trace(go.Scatter(
+                    x=[3],
+                    y=[y_pos],
+                    mode='markers+text',
+                    marker=dict(size=35, color='#9C27B0', line=dict(width=2, color='white')),
+                    text=[dw_column[:20]],
+                    textposition="middle right",
+                    textfont=dict(size=9),
+                    hovertext=f"<b>DW Column:</b> {dw_column}",
+                    hoverinfo='text',
+                    showlegend=False
+                ))
+                
+                # Arrow to DW
+                fig.add_annotation(
+                    x=1.65, y=y_pos,
+                    ax=2.85, ay=y_pos,
+                    showarrow=True,
+                    arrowhead=2,
+                    arrowsize=1,
+                    arrowwidth=2,
+                    arrowcolor='#9C27B0'
+                )
+        
+        title_text = f"🔄 Field Lineage: {selected_file}" if selected_file else "🔄 Field Lineage Overview (First 15 fields)"
+        
+        fig.update_layout(
+            title=title_text,
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-0.8, 3.8]),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            height=max(600, num_fields * 45),
+            margin=dict(l=200, r=200, t=60, b=20),
+            plot_bgcolor='white'
+        )
+        
+        return fig
+        
+    except Exception as e:
+        st.error(f"Error creating lineage diagram: {e}")
+        return None
+
+# ========================================================
+# FIELD MAPPING VIEWER UI
+# ========================================================
+
+def render_field_mapping_viewer(matched_df):
+    """
+    Main UI for AddVantage Field Mapping Viewer
+    
+    Shows:
+    - File overview
+    - Field details
+    - Matched vs unmatched
+    - Search and filter
+    """
+    
+    if matched_df is None or len(matched_df) == 0:
+        st.warning("⚠️ No field mappings loaded")
+        return
+    
+    st.markdown("## 📁 AddVantage Field Mapping Viewer")
+    
+    # Tabs
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Overview", "🔍 Field Details", "📋 By File", "🔎 Search"])
+    
+    with tab1:
+        st.subheader("Field Mapping Overview")
+        
+        # Metrics
+        col1, col2, col3, col4 = st.columns(4)
+        
+        total_fields = len(matched_df)
+        matched_fields = len(matched_df[matched_df['match_confidence'] != 'Unmatched'])
+        unmatched_fields = total_fields - matched_fields
+        total_files = matched_df['file_clean'].nunique()
+        
+        with col1:
+            st.metric("Total Fields", total_fields)
+        with col2:
+            st.metric("Matched", matched_fields, f"{matched_fields/total_fields*100:.1f}%")
+        with col3:
+            st.metric("Unmatched", unmatched_fields, f"{unmatched_fields/total_fields*100:.1f}%")
+        with col4:
+            st.metric("Files", total_files)
+        
+        st.markdown("---")
+        
+        # Match confidence breakdown
+        st.subheader("Match Confidence Distribution")
+        
+        confidence_counts = matched_df['match_confidence'].value_counts()
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            for conf, count in confidence_counts.items():
+                pct = count / total_fields * 100
+                if conf == 'High':
+                    st.success(f"🟢 **High Confidence:** {count} ({pct:.1f}%)")
+                elif conf == 'Medium':
+                    st.warning(f"🟡 **Medium Confidence:** {count} ({pct:.1f}%)")
+                elif conf == 'Low':
+                    st.info(f"🟠 **Low Confidence:** {count} ({pct:.1f}%)")
+                else:
+                    st.error(f"⚫ **Unmatched:** {count} ({pct:.1f}%)")
+        
+        with col2:
+            # File distribution
+            st.subheader("Fields by File")
+            file_counts = matched_df['file_clean'].value_counts().head(10)
+            for file, count in file_counts.items():
+                st.write(f"📄 **{file}**: {count} fields")
+    
+    with tab2:
+        st.subheader("Complete Field Details")
+        
+        # Filter options
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            show_filter = st.selectbox(
+                "Show:",
+                ["All Fields", "Matched Only", "Unmatched Only", "High Confidence", "Medium Confidence", "Low Confidence"]
+            )
+        
+        with col2:
+            selected_file = st.selectbox(
+                "Filter by File:",
+                ["All Files"] + sorted(matched_df['file_clean'].unique().tolist())
+            )
+        
+        with col3:
+            selected_type = st.selectbox(
+                "Filter by Data Type:",
+                ["All Types"] + sorted(matched_df['data_type'].dropna().unique().tolist())
+            )
+        
+        # Apply filters
+        filtered_df = matched_df.copy()
+        
+        if show_filter == "Matched Only":
+            filtered_df = filtered_df[filtered_df['match_confidence'] != 'Unmatched']
+        elif show_filter == "Unmatched Only":
+            filtered_df = filtered_df[filtered_df['match_confidence'] == 'Unmatched']
+        elif show_filter in ['High Confidence', 'Medium Confidence', 'Low Confidence']:
+            conf = show_filter.replace(' Confidence', '')
+            filtered_df = filtered_df[filtered_df['match_confidence'] == conf]
+        
+        if selected_file != "All Files":
+            filtered_df = filtered_df[filtered_df['file_clean'] == selected_file]
+        
+        if selected_type != "All Types":
+            filtered_df = filtered_df[filtered_df['data_type'] == selected_type]
+        
+        st.write(f"Showing {len(filtered_df)} of {len(matched_df)} fields")
+        
+        # Display columns to show
+        display_cols = ['file_clean', 'field_name', 'data_type', 'max_length', 
+                       'matched_source_field', 'matched_entity', 'matched_dw_column', 
+                       'match_confidence', 'null_percentage']
+        
+        display_cols = [col for col in display_cols if col in filtered_df.columns]
+        
+        st.dataframe(
+            filtered_df[display_cols],
+            use_container_width=True,
+            height=500
+        )
+        
+        # Export
+        csv = filtered_df.to_csv(index=False)
+        st.download_button(
+            "📥 Export Filtered Data",
+            csv,
+            "field_mappings_filtered.csv",
+            "text/csv"
+        )
+    
+    with tab3:
+        st.subheader("Field Lineage by File")
+        
+        file_list = sorted(matched_df['file_clean'].unique())
+        selected_file_viz = st.selectbox(
+            "Select File to Visualize:",
+            file_list,
+            key="file_viz_select"
+        )
+        
+        if selected_file_viz:
+            file_data = matched_df[matched_df['file_clean'] == selected_file_viz]
+            
+            st.write(f"**File:** {selected_file_viz}")
+            st.write(f"**Total Fields:** {len(file_data)}")
+            st.write(f"**Matched:** {len(file_data[file_data['match_confidence'] != 'Unmatched'])}")
+            
+            # Lineage diagram
+            lineage_fig = create_field_mapping_diagram(matched_df, selected_file_viz)
+            if lineage_fig:
+                st.plotly_chart(lineage_fig, use_container_width=True)
+            
+            st.markdown("---")
+            
+            # Field table for this file
+            st.subheader(f"All Fields in {selected_file_viz}")
+            st.dataframe(
+                file_data[display_cols] if all(c in file_data.columns for c in display_cols) else file_data,
+                use_container_width=True
+            )
+    
+    with tab4:
+        st.subheader("🔎 Search Fields")
+        
+        search_term = st.text_input("Search for field name:")
+        
+        search_in = st.radio(
+            "Search in:",
+            ["AddVantage Field Names", "Entity Source Fields", "DW Columns", "All"],
+            horizontal=True
+        )
+        
+        if search_term:
+            search_lower = search_term.lower()
+            
+            mask = pd.Series([False] * len(matched_df))
+            
+            if search_in in ["AddVantage Field Names", "All"]:
+                mask |= matched_df['field_name'].str.lower().str.contains(search_lower, na=False)
+            
+            if search_in in ["Entity Source Fields", "All"]:
+                mask |= matched_df['matched_source_field'].str.lower().str.contains(search_lower, na=False)
+            
+            if search_in in ["DW Columns", "All"]:
+                mask |= matched_df['matched_dw_column'].str.lower().str.contains(search_lower, na=False)
+            
+            results = matched_df[mask]
+            
+            if len(results) > 0:
+                st.success(f"✅ Found {len(results)} matches")
+                st.dataframe(
+                    results[display_cols] if all(c in results.columns for c in display_cols) else results,
+                    use_container_width=True
+                )
+            else:
+                st.info(f"No matches found for '{search_term}'")
+
+# ========================================================
+# STANDALONE MODE
+# ========================================================
+
+if __name__ == "__main__":
+    st.set_page_config(
+        page_title="Field Mapping Viewer",
+        page_icon="📁",
+        layout="wide"
+    )
+    
+    st.title("📁 AddVantage Field Mapping Viewer - Standalone")
+    
+    st.sidebar.header("Upload Files")
+    
+    # Upload AddVantage field mapping
+    addv_file = st.sidebar.file_uploader(
+        "Upload AddVantage Field Mapping",
+        type=['xlsx', 'xls'],
+        help="Excel with columns: file, field_name, data_type, max_length, null_percentage, row_count"
+    )
+    
+    # Upload Entity Model Reference (optional, for matching)
+    entity_file = st.sidebar.file_uploader(
+        "Upload Entity Model Reference (Optional)",
+        type=['xlsx', 'xls'],
+        help="For semantic matching with entity source fields"
+    )
+    
+    if addv_file:
+        # Load AddVantage mapping
+        addv_df = load_addvantage_field_mapping(addv_file)
+        
+        if addv_df is not None:
+            # Load entity models if provided
+            entity_models = {}
+            
+            if entity_file:
+                import entity_explorer as ee
+                entity_matrix, entity_models = ee.load_entity_model_reference(entity_file)
+            
+            # Matching options
+            st.sidebar.markdown("---")
+            st.sidebar.header("Matching Options")
+            
+            use_semantic = st.sidebar.checkbox(
+                "Enable Semantic Matching",
+                value=True,
+                help="Use AI to find similar field names"
+            )
+            
+            min_score = st.sidebar.slider(
+                "Minimum Match Score",
+                30, 100, 60,
+                help="Lower = more matches (less confident)"
+            )
+            
+            if st.sidebar.button("🔄 Match Fields", type="primary"):
+                with st.spinner("Matching fields..."):
+                    matched_df = match_fields_to_entity_models(
+                        addv_df,
+                        entity_models,
+                        min_score=min_score,
+                        use_semantic=use_semantic
+                    )
+                    
+                    if matched_df is not None:
+                        st.session_state.matched_df = matched_df
+            
+            # Render viewer
+            if 'matched_df' in st.session_state and st.session_state.matched_df is not None:
+                render_field_mapping_viewer(st.session_state.matched_df)
+            else:
+                st.info("👈 Click 'Match Fields' in sidebar to start")
+    else:
+        st.info("👆 Upload AddVantage Field Mapping file to get started")
+        
+        with st.expander("📋 Expected File Format", expanded=True):
+            st.markdown("""
+            **Required Columns:**
+            - `file`: Feed file name (timestamps will be removed)
+            - `field_name`: Field name in AddVantage feed
+            
+            **Optional Columns:**
+            - `data_type`: Data type (VARCHAR, INT, etc.)
+            - `max_length`: Maximum field length
+            - `null_percentage`: Percentage of null values
+            - `row_count`: Number of rows
+            
+            **Example:**
+            ```
+            file                           | field_name      | data_type | max_length
+            customer_feed_20240115.dat     | ACCOUNT_NUMBER  | VARCHAR   | 20
+            customer_feed_20240115.dat     | CUSTOMER_NAME   | VARCHAR   | 100
+            transaction_20240116.csv       | TRANS_ID        | INT       | 10
+            ```
+            """)
