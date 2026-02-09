@@ -385,18 +385,24 @@ def match_sei_to_addvantage(sei_df, addv_df, entity_models=None, min_score=60, u
             score = 0
             match_type = ""
             
-            # 1. Exact field name match
+            # 1. Exact field name match (HIGHEST PRIORITY)
             if sei_norm == addv_norm:
                 score = 100
                 match_type = "Exact name"
             
-            # 2. Partial field name match
-            elif sei_norm in addv_norm or addv_norm in sei_norm:
-                score = 80
-                match_type = "Partial name"
+            # 2. Partial field name match (STRICTER - avoid false positives)
+            # Only match if SEI field is the END of AddV field (suffix match)
+            # Example: "ACCOUNT_NUMBER" matches "RECEIVING_ACCOUNT_NUMBER" ❌ NO
+            # Example: "ACCOUNT" matches "ACCOUNT_NUMBER" ❌ NO  
+            # Example: "NUMBER" matches "ACCOUNT_NUMBER" ✅ YES (suffix)
+            elif not score and (addv_norm.endswith(sei_norm) or sei_norm.endswith(addv_norm)):
+                # Check it's a meaningful match (not just 1-2 chars)
+                if len(sei_norm) >= 3 and len(addv_norm) >= 3:
+                    score = 75
+                    match_type = "Partial name (suffix)"
             
             # 3. Semantic match using field name only
-            elif use_semantic and sei_emb_name is not None:
+            if not score and use_semantic and sei_emb_name is not None:
                 try:
                     sim_name = np.dot(sei_emb_name[idx], addv_emb[aidx])
                     if sim_name >= 0.85:
@@ -412,11 +418,12 @@ def match_sei_to_addvantage(sei_df, addv_df, entity_models=None, min_score=60, u
                     pass
             
             # 4. Enhanced semantic match using field name + description
-            if use_semantic and sei_emb_desc is not None and sei_desc:
+            # BUT: Never override exact name matches (score 100)
+            if score < 100 and use_semantic and sei_emb_desc is not None and sei_desc:
                 try:
                     sim_desc = np.dot(sei_emb_desc[idx], addv_emb[aidx])
                     
-                    # Description-based matching can boost confidence
+                    # Description-based matching can boost confidence (but not override exact)
                     if sim_desc >= 0.80:
                         boost_score = 95
                         if boost_score > score:
