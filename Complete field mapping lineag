@@ -251,9 +251,72 @@ def match_sei_to_addvantage(sei_df, addv_df, entity_models=None, min_score=60, u
                 sei_emb_desc = model.encode(sei_texts_desc, batch_size=32, show_progress_bar=False, convert_to_numpy=True)
                 st.success("✅ SEI descriptions included in matching")
             
-            # AddVantage: field name embeddings
-            addv_texts = addv_df['field_name'].tolist()
-            addv_emb = model.encode(addv_texts, batch_size=32, show_progress_bar=False, convert_to_numpy=True)
+            # AddVantage: Build enhanced embeddings using entity descriptions
+            # For each AddVantage field, find its entity description
+            addv_texts_enhanced = []
+            addv_field_to_entity_desc = {}
+            
+            for _, addv_row in addv_df.iterrows():
+                addv_field = safe_get(addv_row, 'field_name', '')
+                
+                # Try to find this field in entity models to get its description
+                entity_desc = ''
+                if entity_models:
+                    for entity_name, entity_df in entity_models.items():
+                        source_col = None
+                        desc_col = None
+                        
+                        # Look for specific column names
+                        for col in entity_df.columns:
+                            col_lower = col.lower()
+                            # Source field column (various names)
+                            if not source_col and 'source' in col_lower and 'field' in col_lower:
+                                source_col = col
+                            # Field Description column (specific name)
+                            if not desc_col and col_lower == 'field_description':
+                                desc_col = col
+                        
+                        # If we found both columns in this entity
+                        if source_col and desc_col:
+                            # Look for exact or partial match
+                            for _, entity_row in entity_df.iterrows():
+                                entity_field = safe_get(entity_row, source_col, '')
+                                if entity_field and (
+                                    normalize_text(entity_field) == normalize_text(addv_field) or
+                                    normalize_text(addv_field) in normalize_text(entity_field) or
+                                    normalize_text(entity_field) in normalize_text(addv_field)
+                                ):
+                                    entity_desc = safe_get(entity_row, desc_col, '')
+                                    if entity_desc:
+                                        addv_field_to_entity_desc[addv_field] = {
+                                            'description': entity_desc,
+                                            'entity': entity_name
+                                        }
+                                        break
+                        
+                        if entity_desc:
+                            break
+                
+                # Combine AddVantage field name with entity description (if found)
+                if entity_desc:
+                    combined = f"{addv_field} {entity_desc}".strip()
+                else:
+                    combined = addv_field
+                
+                addv_texts_enhanced.append(combined)
+            
+            # Encode enhanced AddVantage embeddings
+            addv_emb = model.encode(addv_texts_enhanced, batch_size=32, show_progress_bar=False, convert_to_numpy=True)
+            
+            if addv_field_to_entity_desc:
+                st.success(f"✅ Enhanced {len(addv_field_to_entity_desc)} AddVantage fields with 'Field Description' from entity models")
+                with st.expander("📋 Sample enhanced fields", expanded=False):
+                    sample_count = min(5, len(addv_field_to_entity_desc))
+                    for i, (field, info) in enumerate(list(addv_field_to_entity_desc.items())[:sample_count]):
+                        st.write(f"**{field}** (from {info['entity']}): {info['description'][:100]}...")
+            else:
+                st.warning("⚠️ No 'Field Description' column found in entity models - using AddVantage field names only")
+                st.info("💡 Make sure entity sheets have a column named 'Field Description'")
             
             # Entity models: build description index
             if entity_models:
