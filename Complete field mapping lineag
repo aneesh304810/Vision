@@ -619,20 +619,21 @@ def render_sei_field_mapping_viewer(matched_df):
         with col1:
             show_filter = st.selectbox(
                 "Show:",
-                ["All Fields", "Matched Only", "Unmatched Only", "High Confidence", "Medium Confidence", "Low Confidence"]
+                ["All Fields", "Matched Only", "Unmatched Only", "High Confidence", "Medium Confidence", "Low Confidence"],
+                key="sei_show_filter"
             )
         
         with col2:
             if 'interface_name' in matched_df.columns:
                 interfaces = ["All Interfaces"] + sorted(matched_df['interface_name'].unique().tolist())
-                selected_interface = st.selectbox("Filter by Interface:", interfaces)
+                selected_interface = st.selectbox("Filter by Interface:", interfaces, key="sei_interface_filter")
             else:
                 selected_interface = "All Interfaces"
         
         with col3:
             if 'match_type' in matched_df.columns:
                 match_types = ["All Types"] + sorted(matched_df[matched_df['match_type'] != 'No match']['match_type'].unique().tolist())
-                selected_type = st.selectbox("Filter by Match Type:", match_types)
+                selected_type = st.selectbox("Filter by Match Type:", match_types, key="sei_match_type_filter")
             else:
                 selected_type = "All Types"
         
@@ -754,12 +755,13 @@ def render_sei_field_mapping_viewer(matched_df):
     with tab4:
         st.subheader("🔎 Search Fields")
         
-        search_term = st.text_input("Search for field name or description:")
+        search_term = st.text_input("Search for field name or description:", key="sei_search")
         
         search_in = st.radio(
             "Search in:",
             ["SEI Field Names", "SEI Descriptions", "AddVantage Fields", "All"],
-            horizontal=True
+            horizontal=True,
+            key="sei_search_in"
         )
         
         if search_term:
@@ -941,7 +943,7 @@ def main():
             selected = st.selectbox(
                 "Select Entity:",
                 ["-- Choose Entity --"] + entity_list,
-                key="entity_select"
+                key="entity_select_main"
             )
             
             if selected and selected != "-- Choose Entity --":
