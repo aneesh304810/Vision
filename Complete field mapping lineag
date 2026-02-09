@@ -1,0 +1,1092 @@
+"""
+========================================================
+COMPLETE FIELD MAPPING TOOL - FIXED VERSION
+========================================================
+Maps three source systems to AddVantage:
+1. Entity Models → AddVantage
+2. SEI Fields → AddVantage
+
+Features:
+- Fixed "View Details" navigation
+- Handles "Metadata" sheet for AddVantage
+- Handles "All Feeds" sheet for SEI
+- Semantic matching for both
+- All fields kept (matched + unmatched)
+========================================================
+"""
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+
+# Import modules
+import entity_explorer as ee
+import field_mapping_viewer as fmv
+import complete_lineage_viewer as clv
+
+# ML
+try:
+    from sentence_transformers import SentenceTransformer
+    ML_AVAILABLE = True
+except:
+    ML_AVAILABLE = False
+
+# Viz
+try:
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except:
+    PLOTLY_AVAILABLE = False
+
+# ========================================================
+# UTILITY FUNCTIONS
+# ========================================================
+
+def clean_column_name(col):
+    """Clean column names for consistent access"""
+    return str(col).strip().lower().replace(" ", "_").replace("/", "_").replace("-", "_").replace("(", "").replace(")", "").strip("_")
+
+def safe_get(row, column, default=""):
+    """Safely get value from row"""
+    try:
+        val = row.get(column, default) if isinstance(row, dict) else getattr(row, column, default)
+        return val if pd.notna(val) and str(val) != 'nan' and str(val) != '' else default
+    except:
+        return default
+
+def normalize_text(text):
+    """Normalize text for matching"""
+    if not isinstance(text, str):
+        return ""
+    return text.lower().replace("_", "").replace(" ", "").replace("-", "").strip()
+
+# ========================================================
+# CONFIG
+# ========================================================
+
+st.set_page_config(
+    page_title="Field Mapping Tool",
+    page_icon="🔄",
+    layout="wide"
+)
+
+# ========================================================
+# SESSION STATE
+# ========================================================
+
+if 'entity_matrix_df' not in st.session_state:
+    st.session_state.entity_matrix_df = None
+if 'entity_models' not in st.session_state:
+    st.session_state.entity_models = {}
+if 'addvantage_df' not in st.session_state:
+    st.session_state.addvantage_df = None
+if 'sei_df' not in st.session_state:
+    st.session_state.sei_df = None
+if 'matched_entity_addv' not in st.session_state:
+    st.session_state.matched_entity_addv = None
+if 'matched_sei_addv' not in st.session_state:
+    st.session_state.matched_sei_addv = None
+if 'selected_entity' not in st.session_state:
+    st.session_state.selected_entity = None
+if 'complete_lineage_df' not in st.session_state:
+    st.session_state.complete_lineage_df = None
+
+# ========================================================
+# SEI LOADER
+# ========================================================
+
+def load_sei_mapping(file):
+    """
+    Load SEI field mapping from "All Feeds" sheet
+    
+    Columns expected:
+    - Metadata (interface name)
+    - Feed (section)
+    - Position
+    - Field Name
+    - Field Description
+    - Data Type
+    - Nullable
+    - Reference
+    """
+    
+    st.info("📊 Loading SEI Field Mapping...")
+    
+    try:
+        excel_file = pd.ExcelFile(file)
+        sheets = excel_file.sheet_names
+        
+        st.write(f"📋 Found sheets: {', '.join(sheets)}")
+        
+        # Find "All Feeds" sheet
+        sheet_name = None
+        for name in ["All Feeds", "all feeds", "All feeds", "ALL FEEDS", "AllFeeds"]:
+            if name in sheets:
+                sheet_name = name
+                break
+        
+        if not sheet_name:
+            sheet_name = sheets[0]
+            st.warning(f"⚠️ 'All Feeds' not found. Using: {sheet_name}")
+        else:
+            st.success(f"✅ Using sheet: {sheet_name}")
+        
+        # Load
+        df = pd.read_excel(file, sheet_name=sheet_name)
+        
+        st.write(f"Loaded {len(df)} rows")
+        
+        # Clean columns
+        df.columns = [clean_column_name(col) for col in df.columns]
+        
+        with st.expander("📋 Column Mapping", expanded=False):
+            st.write("Detected columns:", list(df.columns))
+            st.dataframe(df.head(3))
+        
+        # Standardize column names
+        rename_map = {}
+        for col in df.columns:
+            if 'metadata' in col or 'interface' in col:
+                rename_map[col] = 'interface_name'
+            elif 'feed' in col and 'metadata' not in col:
+                rename_map[col] = 'feed_section'
+            elif 'position' in col:
+                rename_map[col] = 'position'
+            elif 'field' in col and 'name' in col:
+                rename_map[col] = 'field_name'
+            elif 'description' in col:
+                rename_map[col] = 'field_description'
+            elif 'data' in col and 'type' in col:
+                rename_map[col] = 'data_type'
+            elif 'null' in col:
+                rename_map[col] = 'nullable'
+            elif 'ref' in col:
+                rename_map[col] = 'reference'
+        
+        df = df.rename(columns=rename_map)
+        
+        # Clean data
+        for col in df.select_dtypes(include=['object']).columns:
+            df[col] = df[col].astype(str).str.strip().replace({'nan': '', 'None': ''})
+        
+        # Remove header rows
+        if 'field_name' in df.columns:
+            df = df[~df['field_name'].str.contains('Header Record', case=False, na=False)]
+            df = df[df['field_name'] != '']
+        
+        # Remove empty rows
+        df = df.dropna(how='all')
+        
+        st.success(f"✅ **Loaded {len(df)} SEI fields**")
+        
+        # Show summary by interface
+        if 'interface_name' in df.columns:
+            interface_counts = df['interface_name'].value_counts()
+            with st.expander("📊 Fields by Interface", expanded=False):
+                for interface, count in interface_counts.head(10).items():
+                    st.write(f"- {interface}: {count} fields")
+        
+        return df
+        
+    except Exception as e:
+        st.error(f"❌ Error loading SEI: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+        return None
+
+# ========================================================
+# MATCH SEI TO ADDVANTAGE
+# ========================================================
+
+def match_sei_to_addvantage(sei_df, addv_df, entity_models=None, min_score=60, use_semantic=True):
+    """
+    Match SEI fields to AddVantage fields
+    
+    Enhanced matching using:
+    1. Field names (exact/partial)
+    2. Field descriptions (semantic)
+    3. Entity model descriptions (if available)
+    
+    Keep ALL SEI fields even if unmatched
+    """
+    
+    st.info("🔄 Matching SEI → AddVantage...")
+    
+    # Load model if needed
+    model = None
+    if use_semantic and ML_AVAILABLE:
+        try:
+            st.write("Loading AI model...")
+            model = SentenceTransformer("all-MiniLM-L6-v2")
+            st.success("✅ Model loaded")
+        except Exception as e:
+            st.warning(f"⚠️ Model load failed: {e}")
+    
+    # Build enhanced text for semantic matching
+    # Combine field name + description for better context
+    
+    # Pre-compute embeddings with descriptions
+    sei_emb_name = None
+    sei_emb_desc = None
+    addv_emb = None
+    entity_emb = None
+    
+    if use_semantic and model:
+        st.write("Computing embeddings with descriptions...")
+        try:
+            # SEI: field name embeddings
+            sei_texts_name = sei_df['field_name'].tolist()
+            sei_emb_name = model.encode(sei_texts_name, batch_size=32, show_progress_bar=False, convert_to_numpy=True)
+            
+            # SEI: field description embeddings (if available)
+            if 'field_description' in sei_df.columns:
+                sei_texts_desc = []
+                for _, row in sei_df.iterrows():
+                    field_name = safe_get(row, 'field_name', '')
+                    field_desc = safe_get(row, 'field_description', '')
+                    # Combine for richer context
+                    combined = f"{field_name} {field_desc}".strip()
+                    sei_texts_desc.append(combined)
+                
+                sei_emb_desc = model.encode(sei_texts_desc, batch_size=32, show_progress_bar=False, convert_to_numpy=True)
+                st.success("✅ SEI descriptions included in matching")
+            
+            # AddVantage: field name embeddings
+            addv_texts = addv_df['field_name'].tolist()
+            addv_emb = model.encode(addv_texts, batch_size=32, show_progress_bar=False, convert_to_numpy=True)
+            
+            # Entity models: build description index
+            if entity_models:
+                entity_field_texts = []
+                entity_field_index = []
+                
+                for entity_name, entity_df in entity_models.items():
+                    # Find description column
+                    desc_col = None
+                    source_col = None
+                    
+                    for col in entity_df.columns:
+                        if 'desc' in col.lower():
+                            desc_col = col
+                        if 'source' in col.lower() and 'field' in col.lower():
+                            source_col = col
+                    
+                    if desc_col and source_col:
+                        for _, row in entity_df.iterrows():
+                            field_name = safe_get(row, source_col, '')
+                            field_desc = safe_get(row, desc_col, '')
+                            if field_name or field_desc:
+                                combined = f"{field_name} {field_desc}".strip()
+                                entity_field_texts.append(combined)
+                                entity_field_index.append({
+                                    'entity': entity_name,
+                                    'field_name': field_name,
+                                    'description': field_desc
+                                })
+                
+                if entity_field_texts:
+                    entity_emb = model.encode(entity_field_texts, batch_size=32, show_progress_bar=False, convert_to_numpy=True)
+                    st.success(f"✅ Entity descriptions loaded ({len(entity_field_texts)} fields)")
+            
+            st.success("✅ All embeddings ready")
+        except Exception as e:
+            st.warning(f"⚠️ Embedding failed: {e}")
+            sei_emb_name = None
+    
+    # Match each SEI field
+    results = []
+    progress = st.progress(0)
+    status = st.empty()
+    
+    total = len(sei_df)
+    matched = 0
+    
+    for idx, (_, sei_row) in enumerate(sei_df.iterrows()):
+        if idx % 50 == 0:
+            progress.progress((idx + 1) / total)
+            status.text(f"Processing {idx + 1}/{total}... ({matched} matched)")
+        
+        sei_field = safe_get(sei_row, 'field_name', '')
+        sei_desc = safe_get(sei_row, 'field_description', '')
+        sei_norm = normalize_text(sei_field)
+        
+        best_idx = None
+        best_score = 0
+        best_match_type = ""
+        
+        # Find best match in AddVantage
+        for aidx, (_, addv_row) in enumerate(addv_df.iterrows()):
+            addv_field = safe_get(addv_row, 'field_name', '')
+            addv_norm = normalize_text(addv_field)
+            
+            score = 0
+            match_type = ""
+            
+            # 1. Exact field name match
+            if sei_norm == addv_norm:
+                score = 100
+                match_type = "Exact name"
+            
+            # 2. Partial field name match
+            elif sei_norm in addv_norm or addv_norm in sei_norm:
+                score = 80
+                match_type = "Partial name"
+            
+            # 3. Semantic match using field name only
+            elif use_semantic and sei_emb_name is not None:
+                try:
+                    sim_name = np.dot(sei_emb_name[idx], addv_emb[aidx])
+                    if sim_name >= 0.85:
+                        score = max(score, 90)
+                        match_type = "Semantic name (high)"
+                    elif sim_name >= 0.75:
+                        score = max(score, 75)
+                        match_type = "Semantic name (med)"
+                    elif sim_name >= 0.65:
+                        score = max(score, 65)
+                        match_type = "Semantic name (low)"
+                except:
+                    pass
+            
+            # 4. Enhanced semantic match using field name + description
+            if use_semantic and sei_emb_desc is not None and sei_desc:
+                try:
+                    sim_desc = np.dot(sei_emb_desc[idx], addv_emb[aidx])
+                    
+                    # Description-based matching can boost confidence
+                    if sim_desc >= 0.80:
+                        boost_score = 95
+                        if boost_score > score:
+                            score = boost_score
+                            match_type = "Semantic desc (high)"
+                    elif sim_desc >= 0.70:
+                        boost_score = 85
+                        if boost_score > score:
+                            score = boost_score
+                            match_type = "Semantic desc (med)"
+                    elif sim_desc >= 0.60:
+                        boost_score = 70
+                        if boost_score > score:
+                            score = boost_score
+                            match_type = "Semantic desc (low)"
+                except:
+                    pass
+            
+            if score > best_score:
+                best_score = score
+                best_idx = aidx
+                best_match_type = match_type
+        
+        # Build result - KEEP ALL
+        row = sei_row.to_dict()
+        
+        if best_idx is not None and best_score >= min_score:
+            matched += 1
+            addv_match = addv_df.iloc[best_idx]
+            
+            row['matched_addv_field'] = safe_get(addv_match, 'field_name')
+            row['matched_addv_file'] = safe_get(addv_match, 'file_clean')
+            row['matched_addv_type'] = safe_get(addv_match, 'data_type')
+            row['matched_addv_length'] = safe_get(addv_match, 'max_length')
+            row['match_score'] = best_score
+            row['match_type'] = best_match_type
+            row['match_confidence'] = 'High' if best_score >= 85 else 'Medium' if best_score >= 70 else 'Low'
+        else:
+            # Unmatched - keep with empty values
+            row['matched_addv_field'] = ''
+            row['matched_addv_file'] = ''
+            row['matched_addv_type'] = ''
+            row['matched_addv_length'] = ''
+            row['match_score'] = 0
+            row['match_type'] = 'No match'
+            row['match_confidence'] = 'Unmatched'
+        
+        results.append(row)
+    
+    progress.empty()
+    status.empty()
+    
+    result_df = pd.DataFrame(results)
+    
+    unmatched = total - matched
+    
+    st.success(f"""
+    ✅ **SEI → AddVantage Matching Complete!**
+    
+    Total SEI Fields: {total}
+    Matched: {matched} ({matched/total*100:.1f}%)
+    Unmatched: {unmatched} ({unmatched/total*100:.1f}%)
+    
+    ⚠️ All {total} fields kept in results (matched + unmatched)
+    """)
+    
+    return result_df
+
+# ========================================================
+# VISUALIZATION
+# ========================================================
+
+def create_sei_lineage_diagram(sei_matched_df, selected_interface=None):
+    """
+    Visual lineage: SEI Field → AddVantage Field
+    """
+    
+    if not PLOTLY_AVAILABLE:
+        return None
+    
+    try:
+        # Filter by interface if specified
+        if selected_interface:
+            df = sei_matched_df[sei_matched_df.get('interface_name', '') == selected_interface]
+        else:
+            df = sei_matched_df.head(15)
+        
+        if len(df) == 0:
+            return None
+        
+        fig = go.Figure()
+        
+        num = min(len(df), 15)
+        
+        for idx, (_, row) in enumerate(df.head(15).iterrows()):
+            sei_field = safe_get(row, 'field_name', f'Field_{idx}')
+            sei_type = safe_get(row, 'data_type', '')
+            addv_field = safe_get(row, 'matched_addv_field', '')
+            addv_file = safe_get(row, 'matched_addv_file', '')
+            addv_type = safe_get(row, 'matched_addv_type', '')
+            confidence = safe_get(row, 'match_confidence', 'Unmatched')
+            
+            y = 15 - idx
+            
+            # SEI Field (left)
+            fig.add_trace(go.Scatter(
+                x=[0], y=[y],
+                mode='markers+text',
+                marker=dict(size=35, color='#FF6B6B', line=dict(width=2, color='white')),
+                text=[sei_field[:25]],
+                textposition="middle left",
+                textfont=dict(size=9),
+                hovertext=f"<b>SEI Field:</b> {sei_field}<br><b>Type:</b> {sei_type}",
+                showlegend=False
+            ))
+            
+            # AddVantage Field (right)
+            if addv_field:
+                color = '#4CAF50' if confidence == 'High' else '#FFC107' if confidence == 'Medium' else '#FF9800'
+                
+                fig.add_trace(go.Scatter(
+                    x=[2], y=[y],
+                    mode='markers+text',
+                    marker=dict(size=35, color=color, line=dict(width=2, color='white')),
+                    text=[addv_field[:25]],
+                    textposition="middle right",
+                    textfont=dict(size=9),
+                    hovertext=f"<b>AddVantage:</b> {addv_field}<br><b>File:</b> {addv_file}<br><b>Type:</b> {addv_type}<br><b>Confidence:</b> {confidence}",
+                    showlegend=False
+                ))
+                
+                # Arrow
+                fig.add_annotation(
+                    x=0.15, y=y, ax=1.85, ay=y,
+                    showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=2, arrowcolor=color
+                )
+            else:
+                # No match
+                fig.add_trace(go.Scatter(
+                    x=[2], y=[y],
+                    mode='markers+text',
+                    marker=dict(size=30, color='#E0E0E0', line=dict(width=2, color='white')),
+                    text=['No Match'],
+                    textposition="middle right",
+                    textfont=dict(size=8, color='#999'),
+                    hovertext="<b>No AddVantage match found</b>",
+                    showlegend=False
+                ))
+                
+                # Dotted arrow
+                fig.add_annotation(
+                    x=0.15, y=y, ax=1.85, ay=y,
+                    showarrow=True, arrowhead=1, arrowsize=1, arrowwidth=1, 
+                    arrowcolor='#CCC', opacity=0.5
+                )
+        
+        title = f"🔄 SEI → AddVantage: {selected_interface}" if selected_interface else "🔄 SEI → AddVantage (First 15)"
+        
+        fig.update_layout(
+            title=title,
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-0.8, 2.8]),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            height=max(500, num * 45),
+            margin=dict(l=250, r=250, t=60, b=20),
+            plot_bgcolor='white'
+        )
+        
+        return fig
+        
+    except Exception as e:
+        st.error(f"Error creating diagram: {e}")
+        return None
+
+# ========================================================
+# ENHANCED SEI FIELD MAPPING VIEWER
+# ========================================================
+
+def render_sei_field_mapping_viewer(matched_df):
+    """
+    Enhanced SEI Field Mapping Viewer (like AddVantage viewer)
+    
+    Shows:
+    - Overview with metrics
+    - Field Details with filters
+    - By Interface breakdown
+    - Search functionality
+    - Match type and descriptions for easy review
+    """
+    
+    if matched_df is None or len(matched_df) == 0:
+        st.warning("⚠️ No SEI mappings loaded")
+        return
+    
+    st.markdown("## 📊 SEI Field Mapping Viewer")
+    
+    # Tabs for different views
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Overview", "🔍 Field Details", "📋 By Interface", "🔎 Search"])
+    
+    with tab1:
+        st.subheader("SEI Mapping Overview")
+        
+        # Metrics
+        col1, col2, col3, col4 = st.columns(4)
+        
+        total_fields = len(matched_df)
+        matched_fields = len(matched_df[matched_df['match_confidence'] != 'Unmatched'])
+        unmatched_fields = total_fields - matched_fields
+        total_interfaces = matched_df['interface_name'].nunique() if 'interface_name' in matched_df.columns else 0
+        
+        with col1:
+            st.metric("Total SEI Fields", total_fields)
+        with col2:
+            st.metric("Matched", matched_fields, f"{matched_fields/total_fields*100:.1f}%")
+        with col3:
+            st.metric("Unmatched", unmatched_fields, f"{unmatched_fields/total_fields*100:.1f}%")
+        with col4:
+            st.metric("Interfaces", total_interfaces)
+        
+        st.markdown("---")
+        
+        # Match confidence breakdown
+        st.subheader("Match Confidence Distribution")
+        
+        confidence_counts = matched_df['match_confidence'].value_counts()
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            for conf, count in confidence_counts.items():
+                pct = count / total_fields * 100
+                if conf == 'High':
+                    st.success(f"🟢 **High Confidence:** {count} ({pct:.1f}%)")
+                elif conf == 'Medium':
+                    st.warning(f"🟡 **Medium Confidence:** {count} ({pct:.1f}%)")
+                elif conf == 'Low':
+                    st.info(f"🟠 **Low Confidence:** {count} ({pct:.1f}%)")
+                else:
+                    st.error(f"⚫ **Unmatched:** {count} ({pct:.1f}%)")
+        
+        with col2:
+            # Match type breakdown
+            if 'match_type' in matched_df.columns:
+                st.subheader("Match Type Breakdown")
+                match_types = matched_df[matched_df['match_type'] != 'No match']['match_type'].value_counts()
+                for mtype, count in match_types.head(10).items():
+                    st.write(f"**{mtype}**: {count} fields")
+        
+        st.markdown("---")
+        
+        # Interface distribution
+        if 'interface_name' in matched_df.columns:
+            st.subheader("Fields by Interface")
+            interface_counts = matched_df['interface_name'].value_counts().head(10)
+            for interface, count in interface_counts.items():
+                st.write(f"📄 **{interface}**: {count} fields")
+    
+    with tab2:
+        st.subheader("Complete Field Details")
+        
+        # Filter options
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            show_filter = st.selectbox(
+                "Show:",
+                ["All Fields", "Matched Only", "Unmatched Only", "High Confidence", "Medium Confidence", "Low Confidence"]
+            )
+        
+        with col2:
+            if 'interface_name' in matched_df.columns:
+                interfaces = ["All Interfaces"] + sorted(matched_df['interface_name'].unique().tolist())
+                selected_interface = st.selectbox("Filter by Interface:", interfaces)
+            else:
+                selected_interface = "All Interfaces"
+        
+        with col3:
+            if 'match_type' in matched_df.columns:
+                match_types = ["All Types"] + sorted(matched_df[matched_df['match_type'] != 'No match']['match_type'].unique().tolist())
+                selected_type = st.selectbox("Filter by Match Type:", match_types)
+            else:
+                selected_type = "All Types"
+        
+        # Apply filters
+        filtered_df = matched_df.copy()
+        
+        if show_filter == "Matched Only":
+            filtered_df = filtered_df[filtered_df['match_confidence'] != 'Unmatched']
+        elif show_filter == "Unmatched Only":
+            filtered_df = filtered_df[filtered_df['match_confidence'] == 'Unmatched']
+        elif show_filter in ['High Confidence', 'Medium Confidence', 'Low Confidence']:
+            conf = show_filter.replace(' Confidence', '')
+            filtered_df = filtered_df[filtered_df['match_confidence'] == conf]
+        
+        if selected_interface != "All Interfaces":
+            filtered_df = filtered_df[filtered_df['interface_name'] == selected_interface]
+        
+        if selected_type != "All Types":
+            filtered_df = filtered_df[filtered_df['match_type'] == selected_type]
+        
+        st.write(f"Showing {len(filtered_df)} of {len(matched_df)} fields")
+        
+        # Display columns - enhanced with descriptions
+        display_cols = [
+            'interface_name',  # Feed name (entity)
+            'field_name',  # SEI field
+            'field_description',  # SEI description
+            'data_type',  # SEI data type
+            'matched_addv_field',  # AddVantage field
+            'matched_addv_file',  # AddVantage file
+            'matched_addv_type',  # AddVantage type
+            'match_score',  # Score
+            'match_type',  # How it matched
+            'match_confidence',  # Confidence level
+            'entity_suggestion'  # Entity cross-reference
+        ]
+        
+        display_cols = [col for col in display_cols if col in filtered_df.columns]
+        
+        # Rename columns for clarity
+        display_df = filtered_df[display_cols].copy()
+        rename_map = {
+            'interface_name': 'SEI Interface (Feed)',
+            'field_name': 'SEI Field',
+            'field_description': 'SEI Description',
+            'data_type': 'SEI Type',
+            'matched_addv_field': 'AddVantage Field',
+            'matched_addv_file': 'AddVantage File',
+            'matched_addv_type': 'AddV Type',
+            'match_score': 'Score',
+            'match_type': 'Match Method',
+            'match_confidence': 'Confidence',
+            'entity_suggestion': 'Entity Reference'
+        }
+        display_df = display_df.rename(columns={k: v for k, v in rename_map.items() if k in display_df.columns})
+        
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            height=500
+        )
+        
+        # Export
+        csv = filtered_df.to_csv(index=False)
+        st.download_button(
+            "📥 Export Filtered Data",
+            csv,
+            "sei_mappings_filtered.csv",
+            "text/csv"
+        )
+    
+    with tab3:
+        st.subheader("Field Mapping by Interface")
+        
+        if 'interface_name' not in matched_df.columns:
+            st.warning("Interface name column not found")
+            return
+        
+        interface_list = sorted(matched_df['interface_name'].unique())
+        selected_interface_viz = st.selectbox(
+            "Select Interface to Visualize:",
+            interface_list,
+            key="interface_viz_select"
+        )
+        
+        if selected_interface_viz:
+            interface_data = matched_df[matched_df['interface_name'] == selected_interface_viz]
+            
+            st.write(f"**Interface:** {selected_interface_viz}")
+            st.write(f"**Total Fields:** {len(interface_data)}")
+            st.write(f"**Matched:** {len(interface_data[interface_data['match_confidence'] != 'Unmatched'])}")
+            
+            # Lineage diagram
+            lineage_fig = create_sei_lineage_diagram(matched_df, selected_interface_viz)
+            if lineage_fig:
+                st.plotly_chart(lineage_fig, use_container_width=True)
+            
+            st.markdown("---")
+            
+            # Field table for this interface with descriptions
+            st.subheader(f"All Fields in {selected_interface_viz}")
+            
+            interface_display_cols = [
+                'field_name',
+                'field_description',
+                'matched_addv_field',
+                'matched_addv_file',
+                'match_score',
+                'match_type',
+                'match_confidence'
+            ]
+            interface_display_cols = [c for c in interface_display_cols if c in interface_data.columns]
+            
+            st.dataframe(
+                interface_data[interface_display_cols],
+                use_container_width=True
+            )
+    
+    with tab4:
+        st.subheader("🔎 Search Fields")
+        
+        search_term = st.text_input("Search for field name or description:")
+        
+        search_in = st.radio(
+            "Search in:",
+            ["SEI Field Names", "SEI Descriptions", "AddVantage Fields", "All"],
+            horizontal=True
+        )
+        
+        if search_term:
+            search_lower = search_term.lower()
+            
+            mask = pd.Series([False] * len(matched_df))
+            
+            if search_in in ["SEI Field Names", "All"]:
+                mask |= matched_df['field_name'].str.lower().str.contains(search_lower, na=False)
+            
+            if search_in in ["SEI Descriptions", "All"] and 'field_description' in matched_df.columns:
+                mask |= matched_df['field_description'].str.lower().str.contains(search_lower, na=False)
+            
+            if search_in in ["AddVantage Fields", "All"]:
+                mask |= matched_df['matched_addv_field'].str.lower().str.contains(search_lower, na=False)
+            
+            results = matched_df[mask]
+            
+            if len(results) > 0:
+                st.success(f"✅ Found {len(results)} matches")
+                
+                # Show with descriptions
+                search_display_cols = [
+                    'interface_name',
+                    'field_name',
+                    'field_description',
+                    'matched_addv_field',
+                    'matched_addv_file',
+                    'match_score',
+                    'match_type',
+                    'match_confidence'
+                ]
+                search_display_cols = [c for c in search_display_cols if c in results.columns]
+                
+                st.dataframe(
+                    results[search_display_cols],
+                    use_container_width=True
+                )
+            else:
+                st.info(f"No matches found for '{search_term}'")
+
+# ========================================================
+# MAIN UI
+# ========================================================
+
+def main():
+    st.title("🔄 Complete Field Mapping Tool")
+    
+    st.markdown("""
+    **Map multiple sources to AddVantage:**
+    - Entity Models → AddVantage
+    - SEI System → AddVantage
+    """)
+    
+    # SIDEBAR
+    with st.sidebar:
+        st.header("📂 File Uploads")
+        
+        # 1. Entity Models
+        st.markdown("### 📊 Entity Model Reference")
+        entity_file = st.file_uploader("Upload Entity Model", type=['xlsx', 'xls'], key="entity")
+        
+        if entity_file and not st.session_state.entity_models:
+            with st.spinner("Loading..."):
+                matrix, models = ee.load_entity_model_reference(entity_file)
+                if matrix is not None:
+                    st.session_state.entity_matrix_df = matrix
+                    st.session_state.entity_models = models
+                    st.success(f"✅ {len(models)} entities")
+        
+        # 2. AddVantage
+        st.markdown("---")
+        st.markdown("### 📁 AddVantage Fields")
+        st.caption("Sheet: 'Metadata' (or first sheet)")
+        addv_file = st.file_uploader("Upload AddVantage", type=['xlsx', 'xls'], key="addv")
+        
+        if addv_file and st.session_state.addvantage_df is None:
+            with st.spinner("Loading..."):
+                # Use first sheet (which should be Metadata)
+                addv_df = fmv.load_addvantage_field_mapping(addv_file)
+                if addv_df is not None:
+                    st.session_state.addvantage_df = addv_df
+                    st.success(f"✅ {len(addv_df)} fields")
+        
+        # 3. SEI
+        st.markdown("---")
+        st.markdown("### 📊 SEI System")
+        st.caption("Sheet: 'All Feeds'")
+        sei_file = st.file_uploader("Upload SEI Mapping", type=['xlsx', 'xls'], key="sei")
+        
+        if sei_file and st.session_state.sei_df is None:
+            with st.spinner("Loading..."):
+                sei_df = load_sei_mapping(sei_file)
+                if sei_df is not None:
+                    st.session_state.sei_df = sei_df
+                    st.success(f"✅ {len(sei_df)} fields")
+        
+        # MATCHING
+        st.markdown("---")
+        st.markdown("### 🔄 Matching Options")
+        
+        use_semantic = st.checkbox("Enable AI Semantic Matching", value=True)
+        min_score = st.slider("Minimum Match Score", 30, 100, 60)
+        
+        # Entity → AddVantage
+        if st.session_state.entity_models and st.session_state.addvantage_df is not None:
+            if st.button("▶️ Match Entity → AddVantage", type="primary"):
+                with st.spinner("Matching..."):
+                    result = fmv.match_fields_to_entity_models(
+                        st.session_state.addvantage_df,
+                        st.session_state.entity_models,
+                        min_score=min_score,
+                        use_semantic=use_semantic
+                    )
+                    if result is not None:
+                        st.session_state.matched_entity_addv = result
+                        st.success("✅ Done!")
+                        st.rerun()
+        
+        # SEI → AddVantage
+        if st.session_state.sei_df is not None and st.session_state.addvantage_df is not None:
+            if st.button("▶️ Match SEI → AddVantage", type="primary"):
+                with st.spinner("Matching..."):
+                    result = match_sei_to_addvantage(
+                        st.session_state.sei_df,
+                        st.session_state.addvantage_df,
+                        entity_models=st.session_state.entity_models if st.session_state.entity_models else None,
+                        min_score=min_score,
+                        use_semantic=use_semantic
+                    )
+                    if result is not None:
+                        st.session_state.matched_sei_addv = result
+                        st.success("✅ Done!")
+                        st.rerun()
+        
+        # Clear
+        st.sidebar.markdown("---")
+        
+        # Build Complete Lineage button
+        if (st.session_state.matched_sei_addv is not None and 
+            st.session_state.matched_entity_addv is not None and 
+            st.session_state.entity_models):
+            
+            st.sidebar.markdown("### 🔄 Complete Lineage")
+            if st.sidebar.button("🔗 Build SEI → AddV → Entity", type="primary"):
+                with st.spinner("Building complete end-to-end lineage..."):
+                    complete_lineage = clv.build_complete_lineage(
+                        st.session_state.matched_sei_addv,
+                        st.session_state.matched_entity_addv,
+                        st.session_state.entity_models
+                    )
+                    if complete_lineage is not None:
+                        st.session_state.complete_lineage_df = complete_lineage
+                        st.sidebar.success("✅ Complete lineage built!")
+                        st.rerun()
+        
+        st.sidebar.markdown("---")
+        if st.button("🗑️ Clear All Data"):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+    
+    # MAIN TABS
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📊 Entity Models",
+        "📁 AddVantage Fields",
+        "📊 SEI Mapping",
+        "🔄 Complete Lineage",
+        "📋 Summary"
+    ])
+    
+    with tab1:
+        st.subheader("Entity Model Explorer")
+        
+        if st.session_state.entity_models:
+            # Simple entity selector that WORKS
+            entity_list = sorted(st.session_state.entity_models.keys())
+            
+            selected = st.selectbox(
+                "Select Entity:",
+                ["-- Choose Entity --"] + entity_list,
+                key="entity_select"
+            )
+            
+            if selected and selected != "-- Choose Entity --":
+                entity_df = st.session_state.entity_models[selected]
+                
+                st.markdown(f"### {selected}")
+                st.write(f"**Fields:** {len(entity_df)}")
+                
+                # Show entity data
+                st.dataframe(entity_df, use_container_width=True, height=400)
+                
+                # Export
+                csv = entity_df.to_csv(index=False)
+                st.download_button(
+                    "📥 Export CSV",
+                    csv,
+                    f"{selected}_fields.csv",
+                    "text/csv"
+                )
+        else:
+            st.info("👈 Upload Entity Model Reference in sidebar")
+    
+    with tab2:
+        st.subheader("AddVantage Field Mapping")
+        
+        if st.session_state.matched_entity_addv is not None:
+            fmv.render_field_mapping_viewer(st.session_state.matched_entity_addv)
+        elif st.session_state.addvantage_df is not None:
+            st.info("✅ AddVantage fields loaded. Click 'Match Entity → AddVantage' in sidebar.")
+            st.dataframe(st.session_state.addvantage_df.head(20))
+        else:
+            st.info("👈 Upload AddVantage field mapping in sidebar")
+    
+    with tab3:
+        st.subheader("📊 SEI Mapping")
+        
+        if st.session_state.matched_sei_addv is not None:
+            # Use enhanced viewer
+            render_sei_field_mapping_viewer(st.session_state.matched_sei_addv)
+        elif st.session_state.sei_df is not None:
+            st.info("✅ SEI fields loaded. Click 'Match SEI → AddVantage' in sidebar.")
+            
+            # Show preview with descriptions
+            st.markdown("### Preview of SEI Data")
+            preview_cols = ['interface_name', 'field_name', 'field_description', 'data_type']
+            preview_cols = [c for c in preview_cols if c in st.session_state.sei_df.columns]
+            st.dataframe(st.session_state.sei_df[preview_cols].head(20), use_container_width=True)
+        else:
+            st.info("👈 Upload SEI mapping in sidebar")
+    
+    with tab4:
+        st.subheader("🔄 Complete End-to-End Lineage")
+        st.markdown("### SEI → AddVantage → Entity (DWH)")
+        
+        if st.session_state.complete_lineage_df is not None:
+            # Render complete lineage viewer
+            clv.render_complete_lineage_viewer(st.session_state.complete_lineage_df)
+        else:
+            st.info("👈 Click 'Build SEI → AddV → Entity' in sidebar")
+            
+            st.markdown("""
+            ### 🔄 Complete Data Lineage
+            
+            This view shows the **complete end-to-end lineage**:
+            
+            ```
+            SEI Field → AddVantage Field → Entity DWH Field
+            ```
+            
+            **What you'll see:**
+            - SEI field names and descriptions
+            - Matched AddVantage fields
+            - Entity source fields and descriptions
+            - Entity DWH columns (final destination)
+            - Match quality at each step
+            - Complete traceability
+            
+            **To build:**
+            1. Match Entity → AddVantage
+            2. Match SEI → AddVantage
+            3. Click "Build SEI → AddV → Entity" in sidebar
+            """)
+            
+            # Show prerequisites
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if st.session_state.matched_entity_addv is not None:
+                    st.success("✅ Entity → AddV matched")
+                else:
+                    st.warning("⚠️ Need: Entity → AddV match")
+            
+            with col2:
+                if st.session_state.matched_sei_addv is not None:
+                    st.success("✅ SEI → AddV matched")
+                else:
+                    st.warning("⚠️ Need: SEI → AddV match")
+            
+            with col3:
+                if st.session_state.entity_models:
+                    st.success("✅ Entity models loaded")
+                else:
+                    st.warning("⚠️ Need: Entity models")
+    
+    with tab5:
+        st.subheader("📋 Mapping Summary")
+        
+        # Show status of all mappings
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("### Entity → AddVantage")
+            if st.session_state.matched_entity_addv is not None:
+                df = st.session_state.matched_entity_addv
+                total = len(df)
+                matched = len(df[df['match_confidence'] != 'Unmatched'])
+                
+                st.success(f"✅ Matched: {matched}/{total} ({matched/total*100:.1f}%)")
+                
+                # Coverage by entity
+                if 'matched_entity' in df.columns:
+                    coverage = df[df['match_confidence'] != 'Unmatched']['matched_entity'].value_counts()
+                    st.write("**Top Entities:**")
+                    for entity, count in coverage.head(5).items():
+                        st.write(f"- {entity}: {count} fields")
+            else:
+                st.info("Not yet matched")
+        
+        with col2:
+            st.markdown("### SEI → AddVantage")
+            if st.session_state.matched_sei_addv is not None:
+                df = st.session_state.matched_sei_addv
+                total = len(df)
+                matched = len(df[df['match_confidence'] != 'Unmatched'])
+                
+                st.success(f"✅ Matched: {matched}/{total} ({matched/total*100:.1f}%)")
+                
+                # Coverage by interface
+                if 'interface_name' in df.columns:
+                    interface_matched = df[df['match_confidence'] != 'Unmatched']['interface_name'].value_counts()
+                    st.write("**Top Interfaces:**")
+                    for interface, count in interface_matched.head(5).items():
+                        st.write(f"- {interface}: {count} fields")
+            else:
+                st.info("Not yet matched")
+
+if __name__ == "__main__":
+    main()
