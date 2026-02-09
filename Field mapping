@@ -1,4 +1,3 @@
-
 """
 ========================================================
 FIELD MAPPING VIEWER - AddVantage Feed Analysis
@@ -581,19 +580,22 @@ def render_field_mapping_viewer(matched_df):
         with col1:
             show_filter = st.selectbox(
                 "Show:",
-                ["All Fields", "Matched Only", "Unmatched Only", "High Confidence", "Medium Confidence", "Low Confidence"]
+                ["All Fields", "Matched Only", "Unmatched Only", "High Confidence", "Medium Confidence", "Low Confidence"],
+                key="fmv_show_filter"
             )
         
         with col2:
             selected_file = st.selectbox(
                 "Filter by File:",
-                ["All Files"] + sorted(matched_df['file_clean'].unique().tolist())
+                ["All Files"] + sorted(matched_df['file_clean'].unique().tolist()),
+                key="fmv_file_filter"
             )
         
         with col3:
             selected_type = st.selectbox(
                 "Filter by Data Type:",
-                ["All Types"] + sorted(matched_df['data_type'].dropna().unique().tolist())
+                ["All Types"] + sorted(matched_df['data_type'].dropna().unique().tolist()),
+                key="fmv_type_filter"
             )
         
         # Apply filters
@@ -671,7 +673,7 @@ def render_field_mapping_viewer(matched_df):
     with tab4:
         st.subheader("🔎 Search Fields")
         
-        search_term = st.text_input("Search for field name:")
+        search_term = st.text_input("Search for field name:", key="fmv_search")
         
         search_in = st.radio(
             "Search in:",
