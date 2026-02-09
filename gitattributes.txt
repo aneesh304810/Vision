@@ -1,12 +1,16 @@
 """
 ========================================================
-INTEGRATED ENTITY & FIELD MAPPING EXPLORER
+ENTITY MODEL EXPLORER - Modular Component
 ========================================================
-Combines:
-1. Entity Model Explorer (Entity Matrix + Field Mappings)
-2. AddVantage Field Mapping (Feed Files + Semantic Matching)
+Can be imported and used by main Data Explorer
+or run standalone
 
-Complete data dictionary and lineage in one tool!
+Features:
+- Load Entity Model Reference Excel
+- Entity Relationship Diagrams
+- Field-level lineage (Source → DW)
+- Search entities and fields
+- Cross-reference with interfaces
 ========================================================
 """
 
@@ -14,10 +18,6 @@ import streamlit as st
 import pandas as pd
 import os
 from collections import defaultdict
-
-# Import both modules
-import entity_explorer as ee
-import field_mapping_viewer as fmv
 
 # Visualization
 try:
@@ -27,637 +27,567 @@ try:
 except:
     PLOTLY_AVAILABLE = False
 
-# ML for semantic matching
-try:
-    from sentence_transformers import SentenceTransformer, util
-    ML_AVAILABLE = True
-except:
-    ML_AVAILABLE = False
-
 # ========================================================
-# PAGE CONFIG
+# UTILITY FUNCTIONS
 # ========================================================
 
-st.set_page_config(
-    page_title="Entity & Field Explorer",
-    page_icon="📚",
-    layout="wide"
-)
+def clean_column_name(col):
+    """Clean column names for consistent access"""
+    return str(col).strip().lower().replace(" ", "_").replace("/", "_").replace("-", "_").replace("(", "").replace(")", "").strip("_")
+
+def safe_get(row, column, default=""):
+    """Safely get value from row"""
+    try:
+        val = row.get(column, default) if isinstance(row, dict) else getattr(row, column, default)
+        return val if pd.notna(val) and str(val) != 'nan' and str(val) != '' else default
+    except:
+        return default
 
 # ========================================================
-# CUSTOM CSS
+# ENTITY MODEL LOADER
 # ========================================================
 
-st.markdown("""
-<style>
-    .integration-badge {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 0.5rem 1rem;
-        border-radius: 20px;
-        display: inline-block;
-        margin: 0.3rem;
-        font-weight: 700;
-    }
-    
-    .match-flow {
-        background: white;
-        padding: 1.5rem;
-        border-radius: 12px;
-        border-left: 5px solid #4CAF50;
-        margin: 1rem 0;
-        box-shadow: 0 3px 15px rgba(0,0,0,0.08);
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# ========================================================
-# SESSION STATE
-# ========================================================
-
-if 'entity_matrix_df' not in st.session_state:
-    st.session_state.entity_matrix_df = None
-if 'entity_models' not in st.session_state:
-    st.session_state.entity_models = {}
-if 'addvantage_df' not in st.session_state:
-    st.session_state.addvantage_df = None
-if 'matched_field_df' not in st.session_state:
-    st.session_state.matched_field_df = None
-if 'selected_entity' not in st.session_state:
-    st.session_state.selected_entity = None
-
-# ========================================================
-# ENHANCED VISUALIZATIONS
-# ========================================================
-
-def create_complete_field_lineage(entity_name, entity_df, matched_addv_df):
+def load_entity_model_reference(file):
     """
-    Create 3-level lineage:
-    Entity Source Field → DW Column → AddVantage Field
+    Load Entity Model Reference Excel
     
-    Shows complete mapping including AddVantage feed fields
+    Expected structure:
+    - Sheet 1: "Entity Matrix" - List of all entities and relationships
+    - Other Sheets: Individual entity models (e.g., "Account", "Transaction")
+      - Columns: Source Field, Field Description, DW Column Name (or similar)
+    
+    Returns:
+        entity_matrix_df: DataFrame with entity matrix
+        entity_models: Dict of {entity_name: DataFrame with field mappings}
+    """
+    
+    st.info("📚 Loading Entity Model Reference...")
+    
+    try:
+        # Read all sheet names
+        excel_file = pd.ExcelFile(file)
+        sheet_names = excel_file.sheet_names
+        
+        st.write(f"✅ Found {len(sheet_names)} sheets")
+        
+        # First sheet is Entity Matrix
+        entity_matrix = None
+        matrix_sheet_name = None
+        
+        for sheet in ["Entity Matrix", "entity matrix", "Matrix", "matrix", "Sheet1"]:
+            if sheet in sheet_names:
+                entity_matrix = pd.read_excel(file, sheet_name=sheet)
+                matrix_sheet_name = sheet
+                st.success(f"✅ Loaded Entity Matrix from sheet: '{sheet}'")
+                break
+        
+        if entity_matrix is None:
+            # Use first sheet
+            entity_matrix = pd.read_excel(file, sheet_name=0)
+            matrix_sheet_name = sheet_names[0]
+            st.info(f"ℹ️ Using first sheet as Entity Matrix: '{matrix_sheet_name}'")
+        
+        # Clean entity matrix
+        entity_matrix.columns = [clean_column_name(col) for col in entity_matrix.columns]
+        entity_matrix = entity_matrix.dropna(axis=1, how='all')
+        entity_matrix = entity_matrix.loc[:, ~entity_matrix.columns.str.contains("^unnamed", case=False)]
+        
+        # Show detected columns
+        with st.expander("📋 Entity Matrix Columns Detected", expanded=False):
+            st.write("Columns found:", list(entity_matrix.columns))
+            st.write(f"Rows: {len(entity_matrix)}")
+        
+        # Load all other sheets as entity models
+        entity_models = {}
+        
+        for sheet_name in sheet_names:
+            # Skip the matrix sheet
+            if sheet_name == matrix_sheet_name:
+                continue
+                
+            try:
+                df = pd.read_excel(file, sheet_name=sheet_name)
+                
+                # Clean columns
+                df.columns = [clean_column_name(col) for col in df.columns]
+                df = df.dropna(axis=1, how='all')
+                df = df.loc[:, ~df.columns.str.contains("^unnamed", case=False)]
+                
+                # Remove empty rows
+                df = df.dropna(how='all')
+                
+                # Clean strings
+                for col in df.select_dtypes(include=['object']).columns:
+                    df[col] = df[col].astype(str).str.strip()
+                    df[col] = df[col].replace({'nan': '', 'None': '', 'NaN': ''})
+                
+                # Store entity model
+                entity_models[sheet_name] = df
+                st.success(f"✅ Loaded entity: **{sheet_name}** ({len(df)} fields)")
+                
+            except Exception as e:
+                st.warning(f"⚠️ Could not load sheet '{sheet_name}': {e}")
+        
+        st.success(f"✅ **Total: {len(entity_models)} entity models loaded**")
+        
+        return entity_matrix, entity_models
+        
+    except Exception as e:
+        st.error(f"❌ Error loading Entity Model Reference: {e}")
+        return None, {}
+
+# ========================================================
+# ENTITY RELATIONSHIP DIAGRAM
+# ========================================================
+
+def create_entity_relationship_diagram(entity_matrix_df, entity_models):
+    """
+    Create interactive ERD from entity matrix
+    Shows entities as nodes, relationships as edges
     """
     
     if not PLOTLY_AVAILABLE:
+        st.warning("⚠️ Plotly not available. Install: pip install plotly networkx")
         return None
     
     try:
-        # Find source and DW columns in entity
+        G = nx.Graph()
+        
+        # Method 1: Parse entity matrix for relationships
+        entities = set()
+        edges = []
+        
+        # Try to find entity columns in matrix
+        entity_cols = [col for col in entity_matrix_df.columns if any(x in col for x in ['entity', 'table', 'name'])]
+        
+        if len(entity_cols) >= 2:
+            # Found relationship columns
+            for _, row in entity_matrix_df.iterrows():
+                entity1 = safe_get(row, entity_cols[0])
+                entity2 = safe_get(row, entity_cols[1]) if len(entity_cols) > 1 else None
+                
+                if entity1:
+                    entities.add(entity1)
+                if entity2 and entity2 != entity1:
+                    entities.add(entity2)
+                    edges.append((entity1, entity2))
+        
+        # Method 2: Use entity model sheet names
+        if not entities:
+            entities = set(entity_models.keys())
+        
+        # Add all entities as nodes
+        for entity in entities:
+            field_count = len(entity_models.get(entity, pd.DataFrame()))
+            G.add_node(entity, fields=field_count)
+        
+        # Add edges
+        for e1, e2 in edges:
+            if e1 in G.nodes() and e2 in G.nodes():
+                G.add_edge(e1, e2)
+        
+        # Layout
+        pos = nx.spring_layout(G, k=3, iterations=50)
+        
+        # Create edge traces
+        edge_x = []
+        edge_y = []
+        
+        for edge in G.edges():
+            x0, y0 = pos[edge[0]]
+            x1, y1 = pos[edge[1]]
+            edge_x.extend([x0, x1, None])
+            edge_y.extend([y0, y1, None])
+        
+        edge_trace = go.Scatter(
+            x=edge_x,
+            y=edge_y,
+            line=dict(width=2, color='#888'),
+            hoverinfo='none',
+            mode='lines'
+        )
+        
+        # Create node traces
+        node_x = []
+        node_y = []
+        node_text = []
+        node_size = []
+        node_hover = []
+        
+        for node in G.nodes():
+            x, y = pos[node]
+            node_x.append(x)
+            node_y.append(y)
+            node_text.append(node)
+            
+            field_count = G.nodes[node].get('fields', 0)
+            node_size.append(max(40, field_count * 2))
+            
+            hover_text = f"<b>{node}</b><br>"
+            hover_text += f"Fields: {field_count}<br>"
+            hover_text += f"Connections: {len(list(G.neighbors(node)))}"
+            node_hover.append(hover_text)
+        
+        node_trace = go.Scatter(
+            x=node_x,
+            y=node_y,
+            mode='markers+text',
+            hoverinfo='text',
+            text=node_text,
+            hovertext=node_hover,
+            textposition="top center",
+            marker=dict(
+                size=node_size,
+                color='#9C27B0',
+                line=dict(width=2, color='white')
+            ),
+            textfont=dict(size=10, color='black')
+        )
+        
+        # Create figure
+        fig = go.Figure(data=[edge_trace, node_trace])
+        
+        fig.update_layout(
+            title={
+                'text': "📊 Entity Relationship Diagram<br><sub>Node size = field count | Click entity name in list below to view details</sub>",
+                'x': 0.5,
+                'xanchor': 'center'
+            },
+            showlegend=False,
+            hovermode='closest',
+            margin=dict(b=20, l=5, r=5, t=80),
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            plot_bgcolor='#f8f9fa',
+            height=600
+        )
+        
+        return fig
+        
+    except Exception as e:
+        st.error(f"Error creating ERD: {e}")
+        return None
+
+# ========================================================
+# FIELD LINEAGE DIAGRAM
+# ========================================================
+
+def create_field_lineage_diagram(entity_name, entity_df):
+    """
+    Create field-level lineage visualization
+    Shows: Source Field → [Transformation] → DW Column
+    """
+    
+    if not PLOTLY_AVAILABLE or entity_df is None or len(entity_df) == 0:
+        return None
+    
+    try:
+        # Detect column names
         source_col = None
-        dw_col = None
+        target_col = None
+        desc_col = None
         
         for col in entity_df.columns:
             col_lower = col.lower()
+            
             if not source_col and any(x in col_lower for x in ['source', 'field']) and 'dw' not in col_lower:
                 source_col = col
-            elif not dw_col and any(x in col_lower for x in ['dw', 'warehouse', 'target']):
-                dw_col = col
+            elif not target_col and any(x in col_lower for x in ['dw', 'warehouse', 'target', 'map']):
+                target_col = col
+            elif not desc_col and any(x in col_lower for x in ['desc', 'description']):
+                desc_col = col
         
-        if not source_col or not dw_col:
+        if not source_col or not target_col:
+            st.warning("⚠️ Could not detect source and target field columns")
+            st.write("Available columns:", list(entity_df.columns))
             return None
         
+        st.info(f"Using: **{source_col}** → **{target_col}**")
+        
+        # Create visualization
         fig = go.Figure()
         
-        # Get fields for this entity
-        num_fields = min(len(entity_df), 10)
+        num_fields = min(len(entity_df), 15)  # Show max 15
         
-        for idx, (_, entity_row) in enumerate(entity_df.head(10).iterrows()):
-            source_field = ee.safe_get(entity_row, source_col, f"Field_{idx}")
-            dw_field = ee.safe_get(entity_row, dw_col, f"DW_{idx}")
+        for idx, (_, row) in enumerate(entity_df.head(15).iterrows()):
+            source_field = safe_get(row, source_col, f"Field_{idx}")
+            target_field = safe_get(row, target_col, f"DW_{idx}")
+            description = safe_get(row, desc_col, "") if desc_col else ""
             
-            # Find matching AddVantage field
-            addv_field = None
-            addv_file = None
-            addv_type = None
+            y_pos = 15 - idx
             
-            if matched_addv_df is not None and len(matched_addv_df) > 0:
-                # Look for match by source field
-                mask = matched_addv_df['matched_source_field'].str.lower() == source_field.lower()
-                if mask.any():
-                    addv_match = matched_addv_df[mask].iloc[0]
-                    addv_field = fmv.safe_get(addv_match, 'field_name')
-                    addv_file = fmv.safe_get(addv_match, 'file_clean')
-                    addv_type = fmv.safe_get(addv_match, 'data_type')
-            
-            y_pos = 10 - idx
-            
-            # Level 1: Entity Source Field (left)
+            # Source field (left)
             fig.add_trace(go.Scatter(
                 x=[0],
                 y=[y_pos],
                 mode='markers+text',
                 marker=dict(size=35, color='#2196F3', line=dict(width=2, color='white')),
-                text=[source_field[:20]],
+                text=[source_field[:25]],
                 textposition="middle left",
                 textfont=dict(size=9),
-                hovertext=f"<b>Entity Source:</b> {source_field}",
+                hovertext=f"<b>Source:</b> {source_field}<br><b>Description:</b> {description}",
+                hoverinfo='text',
                 showlegend=False
             ))
             
-            # Level 2: DW Column (middle)
+            # Target field (right)
             fig.add_trace(go.Scatter(
-                x=[1.5],
+                x=[2],
                 y=[y_pos],
                 mode='markers+text',
-                marker=dict(size=35, color='#9C27B0', line=dict(width=2, color='white')),
-                text=[dw_field[:20]],
-                textposition="top center",
+                marker=dict(size=35, color='#4CAF50', line=dict(width=2, color='white')),
+                text=[target_field[:25]],
+                textposition="middle right",
                 textfont=dict(size=9),
-                hovertext=f"<b>DW Column:</b> {dw_field}",
+                hovertext=f"<b>DW Column:</b> {target_field}",
+                hoverinfo='text',
                 showlegend=False
             ))
             
-            # Arrow: Source → DW
+            # Arrow
             fig.add_annotation(
                 x=0.15, y=y_pos,
-                ax=1.35, ay=y_pos,
+                ax=1.85, ay=y_pos,
+                xref='x', yref='y',
+                axref='x', ayref='y',
                 showarrow=True,
                 arrowhead=2,
                 arrowsize=1,
                 arrowwidth=2,
-                arrowcolor='#9C27B0'
+                arrowcolor='#888'
             )
-            
-            # Level 3: AddVantage Field (right) - if exists
-            if addv_field:
-                fig.add_trace(go.Scatter(
-                    x=[3],
-                    y=[y_pos],
-                    mode='markers+text',
-                    marker=dict(size=35, color='#4CAF50', line=dict(width=2, color='white')),
-                    text=[addv_field[:20]],
-                    textposition="middle right",
-                    textfont=dict(size=9),
-                    hovertext=f"<b>AddVantage:</b> {addv_field}<br><b>File:</b> {addv_file}<br><b>Type:</b> {addv_type}",
-                    showlegend=False
-                ))
-                
-                # Arrow: DW → AddVantage
-                fig.add_annotation(
-                    x=1.65, y=y_pos,
-                    ax=2.85, ay=y_pos,
-                    showarrow=True,
-                    arrowhead=2,
-                    arrowsize=1,
-                    arrowwidth=2,
-                    arrowcolor='#4CAF50'
-                )
-            else:
-                # No AddVantage match
-                fig.add_trace(go.Scatter(
-                    x=[3],
-                    y=[y_pos],
-                    mode='markers+text',
-                    marker=dict(size=30, color='#E0E0E0', line=dict(width=2, color='white')),
-                    text=['No Match'],
-                    textposition="middle right",
-                    textfont=dict(size=8, color='#999'),
-                    hovertext="<b>No AddVantage field matched</b>",
-                    showlegend=False
-                ))
         
         fig.update_layout(
-            title=f"🔄 Complete Field Lineage: {entity_name}<br><sub>Entity Source → DW Column → AddVantage Field</sub>",
-            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-0.8, 3.8]),
+            title=f"🔄 Field Lineage: {entity_name}",
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-0.8, 2.8]),
             yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            height=max(600, num_fields * 50),
-            margin=dict(l=200, r=200, t=80, b=20),
+            height=max(500, num_fields * 40),
+            margin=dict(l=200, r=200, t=60, b=20),
             plot_bgcolor='white'
         )
         
         return fig
         
     except Exception as e:
-        st.error(f"Error creating complete lineage: {e}")
+        st.error(f"Error creating field lineage: {e}")
         return None
 
 # ========================================================
-# INTEGRATED UI
+# ENTITY EXPLORER UI
 # ========================================================
 
-def render_integrated_explorer():
+def render_entity_explorer(entity_matrix_df, entity_models, selected_entity=None):
     """
-    Main integrated UI combining entity and field mapping
+    Main Entity Explorer UI
+    Can be called from main app or run standalone
+    
+    Args:
+        entity_matrix_df: DataFrame with entity matrix
+        entity_models: Dict of entity DataFrames
+        selected_entity: Optional - entity to show details for
     """
     
-    st.markdown("""
-    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                padding: 2rem; border-radius: 15px; text-align: center; margin-bottom: 2rem;">
-        <h1 style="color: white; margin: 0;">📚 Entity & Field Mapping Explorer</h1>
-        <p style="color: white; margin: 0.5rem 0 0 0; font-size: 1.2rem;">
-            Complete Data Dictionary + AddVantage Feed Analysis
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("## 📚 Entity Model Explorer")
     
-    # Check what's loaded
-    has_entities = st.session_state.entity_matrix_df is not None
-    has_addvantage = st.session_state.addvantage_df is not None
-    has_matching = st.session_state.matched_field_df is not None
+    if entity_matrix_df is None or not entity_models:
+        st.warning("⚠️ No entity models loaded. Upload Entity Model Reference file.")
+        return None
     
-    # Status badges
-    col1, col2, col3 = st.columns(3)
+    # Tabs
+    tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Entity Detail", "🔎 Field Search"])
     
-    with col1:
-        if has_entities:
-            st.markdown('<span class="integration-badge">✅ Entity Models Loaded</span>', unsafe_allow_html=True)
-        else:
-            st.markdown('<span class="integration-badge" style="background: #ccc;">⚪ Entity Models</span>', unsafe_allow_html=True)
-    
-    with col2:
-        if has_addvantage:
-            st.markdown('<span class="integration-badge">✅ AddVantage Fields Loaded</span>', unsafe_allow_html=True)
-        else:
-            st.markdown('<span class="integration-badge" style="background: #ccc;">⚪ AddVantage Fields</span>', unsafe_allow_html=True)
-    
-    with col3:
-        if has_matching:
-            st.markdown('<span class="integration-badge">✅ Fields Matched</span>', unsafe_allow_html=True)
-        else:
-            st.markdown('<span class="integration-badge" style="background: #ccc;">⚪ Matching</span>', unsafe_allow_html=True)
-    
-    st.markdown("---")
-    
-    # Main tabs
-    if has_entities and has_addvantage and has_matching:
-        # Full integrated view
-        tab1, tab2, tab3, tab4 = st.tabs([
-            "🔄 Complete Lineage",
-            "📊 Entity Models", 
-            "📁 AddVantage Fields",
-            "🔍 Cross-Reference"
-        ])
+    with tab1:
+        st.subheader("Entity Relationship Diagram")
         
-        with tab1:
-            render_complete_lineage_view()
+        with st.expander("ℹ️ How to use", expanded=False):
+            st.markdown("""
+            - **Hover** over nodes to see entity details
+            - **Larger nodes** = more fields
+            - **Connected nodes** = related entities
+            - **Click** entity name in list below to view details
+            """)
         
-        with tab2:
-            render_entity_view()
+        # Generate ERD
+        erd_fig = create_entity_relationship_diagram(entity_matrix_df, entity_models)
+        if erd_fig:
+            st.plotly_chart(erd_fig, use_container_width=True)
         
-        with tab3:
-            render_addvantage_view()
+        st.markdown("---")
         
-        with tab4:
-            render_cross_reference_view()
-    
-    elif has_entities:
-        # Only entities loaded
-        st.info("ℹ️ Entity models loaded. Upload AddVantage field mapping to see complete lineage.")
-        render_entity_view()
-    
-    elif has_addvantage:
-        # Only AddVantage loaded
-        st.info("ℹ️ AddVantage fields loaded. Upload entity models to enable matching.")
-        render_addvantage_view()
-    
-    else:
-        # Nothing loaded
-        render_welcome_screen()
-
-def render_complete_lineage_view():
-    """Show complete 3-level lineage for selected entity"""
-    
-    st.subheader("🔄 Complete Field Lineage")
-    
-    st.markdown("""
-    <div class="match-flow">
-        <h4>📍 3-Level Data Flow:</h4>
-        <p><strong>Level 1:</strong> Entity Source Field (from entity models)</p>
-        <p><strong>Level 2:</strong> Data Warehouse Column (target mapping)</p>
-        <p><strong>Level 3:</strong> AddVantage Feed Field (actual feed files)</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Entity selector
-    entity_list = sorted(st.session_state.entity_models.keys())
-    
-    selected = st.selectbox(
-        "Select Entity to View Complete Lineage:",
-        entity_list,
-        key="lineage_entity_select"
-    )
-    
-    if selected:
-        entity_df = st.session_state.entity_models[selected]
+        # Entity list
+        st.subheader(f"📋 All Entities ({len(entity_models)})")
         
-        # Show stats
         col1, col2, col3 = st.columns(3)
         
-        with col1:
-            st.metric("Entity Fields", len(entity_df))
-        
-        with col2:
-            # Count how many have AddVantage matches
-            if st.session_state.matched_field_df is not None:
-                matched_count = 0
-                for _, row in entity_df.iterrows():
-                    source_col = None
-                    for col in entity_df.columns:
-                        if 'source' in col.lower() and 'field' in col.lower():
-                            source_col = col
-                            break
+        for idx, (entity_name, entity_df) in enumerate(sorted(entity_models.items())):
+            with [col1, col2, col3][idx % 3]:
+                with st.container():
+                    st.markdown(f"""
+                    <div style="background: white; padding: 1rem; border-radius: 10px; 
+                                border-left: 4px solid #9C27B0; margin: 0.5rem 0;
+                                box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                        <h4 style="margin: 0; color: #9C27B0;">{entity_name}</h4>
+                        <p style="margin: 0.5rem 0 0 0; color: #666;">
+                            {len(entity_df)} fields
+                        </p>
+                    </div>
+                    """, unsafe_allow_html=True)
                     
-                    if source_col:
-                        source_field = ee.safe_get(row, source_col)
-                        if source_field:
-                            mask = st.session_state.matched_field_df['matched_source_field'].str.lower() == source_field.lower()
-                            if mask.any():
-                                matched_count += 1
-                
-                st.metric("Matched to AddVantage", matched_count, f"{matched_count/len(entity_df)*100:.0f}%")
-            else:
-                st.metric("Matched to AddVantage", "N/A")
+                    if st.button(f"View Details →", key=f"view_{entity_name}"):
+                        # Switch to Entity Detail tab
+                        return entity_name
+    
+    with tab2:
+        st.subheader("🔍 Entity Details")
         
-        with col3:
-            unmatched = len(entity_df) - matched_count if st.session_state.matched_field_df is not None else 0
-            st.metric("Not in AddVantage", unmatched)
+        # Entity selector
+        entity_list = sorted(entity_models.keys())
         
-        st.markdown("---")
+        if selected_entity and selected_entity in entity_list:
+            default_idx = entity_list.index(selected_entity)
+        else:
+            default_idx = 0
         
-        # Complete lineage diagram
-        st.subheader("Visual Lineage")
-        
-        lineage_fig = create_complete_field_lineage(
-            selected,
-            entity_df,
-            st.session_state.matched_field_df
+        selected = st.selectbox(
+            "Select Entity:",
+            entity_list,
+            index=default_idx,
+            key="entity_selector"
         )
         
-        if lineage_fig:
-            st.plotly_chart(lineage_fig, use_container_width=True)
-        
-        # Detailed table
-        st.markdown("---")
-        st.subheader("Complete Field Mapping Table")
-        
-        # Build integrated table
-        integrated_data = []
-        
-        source_col = None
-        dw_col = None
-        desc_col = None
-        
-        for col in entity_df.columns:
-            col_lower = col.lower()
-            if not source_col and 'source' in col_lower and 'field' in col_lower:
-                source_col = col
-            elif not dw_col and any(x in col_lower for x in ['dw', 'warehouse', 'target']):
-                dw_col = col
-            elif not desc_col and 'desc' in col_lower:
-                desc_col = col
-        
-        for _, entity_row in entity_df.iterrows():
-            source_field = ee.safe_get(entity_row, source_col, '') if source_col else ''
-            dw_field = ee.safe_get(entity_row, dw_col, '') if dw_col else ''
-            description = ee.safe_get(entity_row, desc_col, '') if desc_col else ''
+        if selected:
+            entity_df = entity_models[selected]
             
-            # Find AddVantage match
-            addv_field = ''
-            addv_file = ''
-            addv_type = ''
-            addv_length = ''
+            st.markdown(f"### 📊 {selected}")
+            st.write(f"**Total Fields:** {len(entity_df)}")
             
-            if st.session_state.matched_field_df is not None and source_field:
-                mask = st.session_state.matched_field_df['matched_source_field'].str.lower() == source_field.lower()
-                if mask.any():
-                    addv_match = st.session_state.matched_field_df[mask].iloc[0]
-                    addv_field = fmv.safe_get(addv_match, 'field_name')
-                    addv_file = fmv.safe_get(addv_match, 'file_clean')
-                    addv_type = fmv.safe_get(addv_match, 'data_type')
-                    addv_length = fmv.safe_get(addv_match, 'max_length')
+            # Field lineage diagram
+            st.markdown("#### 🔄 Field Lineage Visualization")
+            lineage_fig = create_field_lineage_diagram(selected, entity_df)
+            if lineage_fig:
+                st.plotly_chart(lineage_fig, use_container_width=True)
             
-            integrated_data.append({
-                'Entity Source Field': source_field,
-                'Description': description,
-                'DW Column': dw_field,
-                'AddVantage Field': addv_field,
-                'AddVantage File': addv_file,
-                'Data Type': addv_type,
-                'Max Length': addv_length
-            })
+            st.markdown("---")
+            
+            # Field mapping table
+            st.markdown("#### 📋 Complete Field Mapping")
+            
+            # Display the dataframe
+            st.dataframe(
+                entity_df,
+                use_container_width=True,
+                height=400
+            )
+            
+            # Export option
+            col1, col2 = st.columns([1, 3])
+            with col1:
+                csv = entity_df.to_csv(index=False)
+                st.download_button(
+                    "📥 Export CSV",
+                    csv,
+                    f"{selected}_fields.csv",
+                    "text/csv"
+                )
+    
+    with tab3:
+        st.subheader("🔎 Field Search")
         
-        integrated_df = pd.DataFrame(integrated_data)
+        st.write("Search across all entities for specific fields")
         
-        st.dataframe(integrated_df, use_container_width=True, height=400)
+        search_term = st.text_input("Search for field name:", "")
         
-        # Export
-        csv = integrated_df.to_csv(index=False)
-        st.download_button(
-            "📥 Export Complete Lineage",
-            csv,
-            f"{selected}_complete_lineage.csv",
-            "text/csv"
+        search_type = st.radio(
+            "Search in:",
+            ["Source Fields", "DW Columns", "Descriptions", "All"],
+            horizontal=True
         )
-
-def render_entity_view():
-    """Entity models view"""
-    
-    st.subheader("📊 Entity Model Explorer")
-    
-    selected = ee.render_entity_explorer(
-        st.session_state.entity_matrix_df,
-        st.session_state.entity_models,
-        st.session_state.selected_entity
-    )
-    
-    if selected:
-        st.session_state.selected_entity = selected
-
-def render_addvantage_view():
-    """AddVantage fields view"""
-    
-    st.subheader("📁 AddVantage Field Mapping")
-    
-    if st.session_state.matched_field_df is not None:
-        fmv.render_field_mapping_viewer(st.session_state.matched_field_df)
-    else:
-        st.info("Click 'Match Fields' in sidebar to match AddVantage fields to entity models")
-
-def render_cross_reference_view():
-    """Cross-reference between entities and AddVantage"""
-    
-    st.subheader("🔍 Cross-Reference Analysis")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("### 📊 Entity Coverage in AddVantage")
         
-        # For each entity, show how many fields are in AddVantage
-        coverage_data = []
-        
-        for entity_name, entity_df in st.session_state.entity_models.items():
-            source_col = None
-            for col in entity_df.columns:
-                if 'source' in col.lower() and 'field' in col.lower():
-                    source_col = col
-                    break
+        if search_term:
+            results = []
             
-            if source_col:
-                total_fields = len(entity_df)
-                matched_count = 0
+            for entity_name, entity_df in entity_models.items():
+                # Search based on type
+                matches = pd.DataFrame()
                 
-                for _, row in entity_df.iterrows():
-                    source_field = ee.safe_get(row, source_col)
-                    if source_field and st.session_state.matched_field_df is not None:
-                        mask = st.session_state.matched_field_df['matched_source_field'].str.lower() == source_field.lower()
+                for col in entity_df.columns:
+                    col_lower = col.lower()
+                    search_lower = search_term.lower()
+                    
+                    if search_type == "All" or \
+                       (search_type == "Source Fields" and 'source' in col_lower) or \
+                       (search_type == "DW Columns" and any(x in col_lower for x in ['dw', 'warehouse', 'target'])) or \
+                       (search_type == "Descriptions" and 'desc' in col_lower):
+                        
+                        mask = entity_df[col].astype(str).str.contains(search_lower, case=False, na=False)
                         if mask.any():
-                            matched_count += 1
+                            temp = entity_df[mask].copy()
+                            temp['Entity'] = entity_name
+                            results.append(temp)
+            
+            if results:
+                combined = pd.concat(results, ignore_index=True)
+                st.success(f"✅ Found {len(combined)} matches across {len(results)} entities")
                 
-                coverage_pct = (matched_count / total_fields * 100) if total_fields > 0 else 0
-                
-                coverage_data.append({
-                    'Entity': entity_name,
-                    'Total Fields': total_fields,
-                    'In AddVantage': matched_count,
-                    'Coverage %': f"{coverage_pct:.1f}%"
-                })
-        
-        coverage_df = pd.DataFrame(coverage_data)
-        st.dataframe(coverage_df, use_container_width=True)
+                st.dataframe(combined, use_container_width=True, height=400)
+            else:
+                st.info(f"No matches found for '{search_term}'")
     
-    with col2:
-        st.markdown("### 📁 AddVantage Fields Without Entity Match")
-        
-        if st.session_state.matched_field_df is not None:
-            unmatched = st.session_state.matched_field_df[
-                st.session_state.matched_field_df['match_confidence'] == 'Unmatched'
-            ]
-            
-            st.metric("Unmatched AddVantage Fields", len(unmatched))
-            
-            if len(unmatched) > 0:
-                st.write("Top 10 unmatched fields:")
-                st.dataframe(
-                    unmatched[['file_clean', 'field_name', 'data_type']].head(10),
-                    use_container_width=True
-                )
-
-def render_welcome_screen():
-    """Welcome screen when nothing is loaded"""
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("""
-        ### 📚 Entity Model Explorer
-        
-        Upload your **Entity Model Reference** Excel to:
-        - View entity relationships
-        - See field mappings (Source → DW)
-        - Browse data dictionary
-        - Export entity details
-        """)
-    
-    with col2:
-        st.markdown("""
-        ### 📁 AddVantage Field Mapping
-        
-        Upload your **AddVantage Field Mapping** Excel to:
-        - Analyze feed file fields
-        - See data types and lengths
-        - Match to entity models (AI-powered)
-        - Complete source-to-target lineage
-        """)
-    
-    st.markdown("---")
-    
-    st.info("👈 Upload files in the sidebar to get started")
+    return None
 
 # ========================================================
-# SIDEBAR
+# STANDALONE MODE
 # ========================================================
-
-def render_sidebar():
-    """Integrated sidebar for both uploads"""
-    
-    st.sidebar.title("📚 Data Explorer")
-    
-    # Entity Model Upload
-    st.sidebar.markdown("### 📊 Entity Model Reference")
-    
-    entity_file = st.sidebar.file_uploader(
-        "Upload Entity Model Reference",
-        type=['xlsx', 'xls'],
-        key="entity_upload",
-        help="Excel with Entity Matrix + entity model sheets"
-    )
-    
-    if entity_file and st.session_state.entity_matrix_df is None:
-        with st.spinner("Loading entity models..."):
-            entity_matrix, entity_models = ee.load_entity_model_reference(entity_file)
-            
-            if entity_matrix is not None:
-                st.session_state.entity_matrix_df = entity_matrix
-                st.session_state.entity_models = entity_models
-                st.sidebar.success(f"✅ {len(entity_models)} entities loaded!")
-    
-    # AddVantage Field Mapping Upload
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### 📁 AddVantage Field Mapping")
-    
-    addv_file = st.sidebar.file_uploader(
-        "Upload AddVantage Field Mapping",
-        type=['xlsx', 'xls'],
-        key="addv_upload",
-        help="Excel with: file, field_name, data_type, max_length, etc."
-    )
-    
-    if addv_file and st.session_state.addvantage_df is None:
-        with st.spinner("Loading AddVantage fields..."):
-            addv_df = fmv.load_addvantage_field_mapping(addv_file)
-            
-            if addv_df is not None:
-                st.session_state.addvantage_df = addv_df
-                st.sidebar.success(f"✅ {len(addv_df)} fields loaded!")
-    
-    # Matching section
-    if st.session_state.entity_models and st.session_state.addvantage_df is not None:
-        st.sidebar.markdown("---")
-        st.sidebar.markdown("### 🔄 Matching")
-        
-        use_semantic = st.sidebar.checkbox(
-            "Enable Semantic Matching",
-            value=True,
-            help="Use AI to find similar field names"
-        )
-        
-        min_score = st.sidebar.slider(
-            "Minimum Match Score",
-            30, 100, 60,
-            help="Lower = more matches (less confident)"
-        )
-        
-        if st.sidebar.button("🔄 Match Fields to Entities", type="primary"):
-            with st.spinner("Matching AddVantage fields to entity models..."):
-                matched_df = fmv.match_fields_to_entity_models(
-                    st.session_state.addvantage_df,
-                    st.session_state.entity_models,
-                    min_score=min_score,
-                    use_semantic=use_semantic
-                )
-                
-                if matched_df is not None:
-                    st.session_state.matched_field_df = matched_df
-                    st.sidebar.success("✅ Matching complete!")
-                    st.rerun()
-    
-    # Clear data
-    st.sidebar.markdown("---")
-    if st.sidebar.button("🗑️ Clear All Data"):
-        st.session_state.entity_matrix_df = None
-        st.session_state.entity_models = {}
-        st.session_state.addvantage_df = None
-        st.session_state.matched_field_df = None
-        st.rerun()
-
-# ========================================================
-# MAIN
-# ========================================================
-
-def main():
-    render_sidebar()
-    render_integrated_explorer()
 
 if __name__ == "__main__":
-    main()
+    st.set_page_config(
+        page_title="Entity Model Explorer",
+        page_icon="📚",
+        layout="wide"
+    )
+    
+    st.title("📚 Entity Model Explorer - Standalone")
+    
+    # File uploader
+    uploaded_file = st.file_uploader(
+        "Upload Entity Model Reference Excel",
+        type=['xlsx', 'xls'],
+        help="Excel file with Entity Matrix sheet and individual entity sheets"
+    )
+    
+    if uploaded_file:
+        # Load entity models
+        entity_matrix, entity_models = load_entity_model_reference(uploaded_file)
+        
+        if entity_matrix is not None and entity_models:
+            # Render explorer
+            selected = render_entity_explorer(entity_matrix, entity_models)
+            
+            # Handle entity selection (for standalone mode, just re-render)
+            if selected:
+                st.rerun()
+    else:
+        st.info("👆 Upload your Entity Model Reference Excel file to get started")
+        
+        with st.expander("📋 Expected File Format", expanded=True):
+            st.markdown("""
+            **Sheet 1: "Entity Matrix"**
+            - List of all entities/tables
+            - Optional: relationships between entities
+            
+            **Other Sheets: Individual Entity Models**
+            - Sheet name = Entity name (e.g., "Account", "Transaction")
+            - Columns should include:
+              - Source field names
+              - Field descriptions
+              - Data warehouse column names
+              
+            **Example:**
+            ```
+            Sheet: Account
+            | Source Field    | Field Description          | DW Column Name |
+            |-----------------|----------------------------|----------------|
+            | ACCOUNT_NUMBER  | Unique account identifier  | ACCOUNT_NUMBER |
+            | CUSTOMER_NAME   | Customer full name         | CUSTOMER_NAME  |
+            ```
+            """)
