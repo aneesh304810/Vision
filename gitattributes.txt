@@ -1,18 +1,23 @@
-
 """
 ========================================================
-Enterprise Data Explorer 360° - Pro Edition
-WITH GLOBAL FILTERS AND INTERACTIVE VISUAL GRAPHS
+ENTITY MODEL EXPLORER - Modular Component
+========================================================
+Can be imported and used by main Data Explorer
+or run standalone
+
+Features:
+- Load Entity Model Reference Excel
+- Entity Relationship Diagrams
+- Field-level lineage (Source → DW)
+- Search entities and fields
+- Cross-reference with interfaces
 ========================================================
 """
 
 import streamlit as st
 import pandas as pd
-import json
-import re
 import os
 from collections import defaultdict
-import numpy as np
 
 # Visualization
 try:
@@ -21,421 +26,13 @@ try:
     PLOTLY_AVAILABLE = True
 except:
     PLOTLY_AVAILABLE = False
-    st.warning("⚠️ Plotly not installed. Visual graphs disabled. Install with: pip install plotly networkx")
-
-# ML/NLP
-try:
-    import torch
-    from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-    from sentence_transformers import SentenceTransformer, util
-    ML_AVAILABLE = True
-except:
-    ML_AVAILABLE = False
-    st.warning("⚠️ ML libraries not available. Semantic matching will be limited.")
-
-# SQL Parsing
-try:
-    import sqlglot
-    from sqlglot.expressions import Table, Column, Join
-    SQLGLOT_AVAILABLE = True
-except:
-    SQLGLOT_AVAILABLE = False
-
-# Visualization  
-try:
-    from streamlit_agraph import agraph, Node, Edge, Config
-    AGRAPH_AVAILABLE = True
-except:
-    AGRAPH_AVAILABLE = False
-
-try:
-    from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
-    AGGRID_AVAILABLE = True
-except:
-    AGGRID_AVAILABLE = False
-
-# Configuration
-st.set_page_config(
-    page_title="Data Explorer 360° Pro",
-    page_icon="🌐",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-if ML_AVAILABLE:
-    torch.set_num_threads(8)
-
-MAPPING_FILE = "interface_sql_mapping.xlsx"
 
 # ========================================================
-# PREMIUM STYLING
+# UTILITY FUNCTIONS
 # ========================================================
-
-st.markdown("""
-<style>
-    .premium-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
-        padding: 2rem;
-        border-radius: 15px;
-        text-align: center;
-        margin-bottom: 2rem;
-        box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
-    }
-    
-    .premium-title {
-        font-size: 3.5rem;
-        font-weight: 800;
-        color: white;
-        margin: 0;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
-    }
-    
-    .breadcrumb {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 1.5rem 2rem;
-        border-radius: 12px;
-        margin-bottom: 2rem;
-        color: white;
-        font-size: 1.1rem;
-    }
-    
-    .metric-card {
-        background: white;
-        padding: 2rem;
-        border-radius: 15px;
-        box-shadow: 0 5px 20px rgba(0,0,0,0.08);
-        text-align: center;
-        transition: all 0.3s ease;
-        border-top: 4px solid #667eea;
-    }
-    
-    .metric-card:hover {
-        transform: translateY(-8px);
-        box-shadow: 0 10px 30px rgba(102, 126, 234, 0.2);
-    }
-    
-    .metric-value {
-        font-size: 3rem;
-        font-weight: 800;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-    }
-    
-    .interactive-card {
-        background: white;
-        padding: 1.5rem;
-        border-radius: 12px;
-        border-left: 5px solid #667eea;
-        margin: 1rem 0;
-        box-shadow: 0 3px 15px rgba(0,0,0,0.08);
-        cursor: pointer;
-        transition: all 0.3s ease;
-    }
-    
-    .interactive-card:hover {
-        transform: translateX(10px);
-        box-shadow: 0 5px 25px rgba(102, 126, 234, 0.15);
-    }
-    
-    .ai-insight {
-        background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
-        border-radius: 12px;
-        padding: 2rem;
-        margin: 2rem 0;
-        border-left: 6px solid #ff6b6b;
-    }
-    
-    .confidence-high {
-        background: #e8f5e9;
-        color: #2e7d32;
-        padding: 0.5rem 1rem;
-        border-radius: 20px;
-        font-weight: 700;
-    }
-    
-    .confidence-medium {
-        background: #fff3e0;
-        color: #ef6c00;
-        padding: 0.5rem 1rem;
-        border-radius: 20px;
-        font-weight: 700;
-    }
-    
-    .confidence-low {
-        background: #fce4ec;
-        color: #c2185b;
-        padding: 0.5rem 1rem;
-        border-radius: 20px;
-        font-weight: 700;
-    }
-    
-    .column-badge {
-        display: inline-block;
-        background: #e3f2fd;
-        color: #1976d2;
-        padding: 0.4rem 1rem;
-        border-radius: 15px;
-        margin: 0.3rem;
-        font-size: 0.9rem;
-    }
-    
-    .active-filter-panel {
-        background: #fff3e0;
-        border-left: 4px solid #ff9800;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 1rem 0;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# ========================================================
-# SESSION STATE
-# ========================================================
-
-if 'navigation_level' not in st.session_state:
-    st.session_state.navigation_level = 'overview'
-if 'selected_source' not in st.session_state:
-    st.session_state.selected_source = None
-if 'selected_target' not in st.session_state:
-    st.session_state.selected_target = None  
-if 'selected_interface' not in st.session_state:
-    st.session_state.selected_interface = None
-if 'selected_sql' not in st.session_state:
-    st.session_state.selected_sql = None
-
-# Data
-if 'interface_df' not in st.session_state:
-    st.session_state.interface_df = None
-if 'sql_df' not in st.session_state:
-    st.session_state.sql_df = None
-if 'mapping_df' not in st.session_state:
-    st.session_state.mapping_df = None
-
-# GLOBAL FILTERS
-if 'filter_source_systems' not in st.session_state:
-    st.session_state.filter_source_systems = []
-if 'filter_target_systems' not in st.session_state:
-    st.session_state.filter_target_systems = []
-if 'filter_types' not in st.session_state:
-    st.session_state.filter_types = []
-if 'filter_applications' not in st.session_state:
-    st.session_state.filter_applications = []
-
-# ========================================================
-# LOAD MODELS
-# ========================================================
-
-@st.cache_resource(show_spinner=False)
-def load_models():
-    """Load models optimized for CPU"""
-    embedding = None
-    llm = None
-    
-    if ML_AVAILABLE:
-        try:
-            st.info("🔄 Loading embedding model (lightweight, CPU-friendly)...")
-            embedding = SentenceTransformer("all-MiniLM-L6-v2")
-            st.success("✅ Embedding model loaded - Semantic matching enabled!")
-        except Exception as e:
-            st.warning(f"⚠️ Could not load embedding model: {e}")
-            st.info("💡 Install with: pip install sentence-transformers")
-    else:
-        st.warning("⚠️ ML libraries not installed. Using deterministic matching only.")
-        st.info("💡 For better matching, install: pip install torch sentence-transformers")
-    
-    # Note: We don't load Phi-3 LLM as it requires 4GB+ RAM and GPU
-    # Instead, we use intelligent rule-based explanations
-    st.info("ℹ️ Using rule-based explanations (fast, CPU-friendly, no GPU needed)")
-    
-    return embedding, llm
-
-embedding_model, llm_model = load_models()
-
-# ========================================================
-# RULE-BASED EXPLANATION GENERATOR (CPU-FRIENDLY)
-# ========================================================
-
-def generate_business_explanation_rules(interface_row, sql_row, tables_list):
-    """Generate business explanation using rules (no LLM needed)"""
-    
-    application = safe_get(interface_row, 'application', 'the system')
-    integration = safe_get(interface_row, 'integration', 'this interface')
-    description = safe_get(interface_row, 'description', '')
-    source = safe_get(interface_row, 'source_system', 'source')
-    target = safe_get(interface_row, 'target_system', 'target')
-    queryname = safe_get(sql_row, 'queryname', 'this query')
-    
-    # Start with purpose
-    explanation = f"**Business Purpose:**\n\n"
-    
-    if description:
-        explanation += f"{description}\n\n"
-    else:
-        explanation += f"This interface ({integration}) transfers data from {source} to {target}.\n\n"
-    
-    # Data source
-    explanation += f"**Data Source:**\n\n"
-    explanation += f"The data originates from the {application} application"
-    if tables_list:
-        explanation += f" and retrieves information from {len(tables_list)} database table(s): "
-        explanation += ", ".join(tables_list[:3])
-        if len(tables_list) > 3:
-            explanation += f", and {len(tables_list) - 3} more"
-    explanation += ".\n\n"
-    
-    # Business value
-    explanation += f"**Business Value:**\n\n"
-    
-    # Detect common patterns
-    if any(word in queryname.lower() for word in ['customer', 'client', 'account']):
-        explanation += "This supports customer relationship management and account tracking. "
-    elif any(word in queryname.lower() for word in ['transaction', 'trade', 'payment']):
-        explanation += "This enables transaction processing and financial record-keeping. "
-    elif any(word in queryname.lower() for word in ['position', 'holding', 'portfolio']):
-        explanation += "This provides portfolio management and position tracking. "
-    elif any(word in queryname.lower() for word in ['balance', 'reconciliation', 'settlement']):
-        explanation += "This ensures accurate balance tracking and financial reconciliation. "
-    else:
-        explanation += "This provides critical data integration between systems. "
-    
-    # Frequency
-    if 'daily' in queryname.lower() or 'daily' in description.lower():
-        explanation += "The data is refreshed daily to ensure business users have current information."
-    elif 'real' in queryname.lower() or 'intraday' in description.lower():
-        explanation += "The data is updated in real-time to support immediate business decisions."
-    else:
-        explanation += "The data is synchronized regularly to maintain accuracy across systems."
-    
-    return explanation
-
-def generate_technical_explanation_rules(sql_row, tables_list, analysis):
-    """Generate technical explanation using rules (no LLM needed)"""
-    
-    queryname = safe_get(sql_row, 'queryname', 'Query')
-    sql_file = safe_get(sql_row, 'file', '')
-    system = safe_get(sql_row, 'system', '')
-    complexity = analysis.get('complexity', 'Unknown')
-    
-    explanation = f"**Technical Overview:**\n\n"
-    
-    # Query identification
-    explanation += f"Query Name: `{queryname}`\n"
-    if sql_file:
-        explanation += f"File Location: `{sql_file}`\n"
-    if system:
-        explanation += f"Source System: {system}\n"
-    explanation += f"Complexity: **{complexity}**\n\n"
-    
-    # Data structures
-    explanation += f"**Data Structures:**\n\n"
-    if tables_list:
-        explanation += f"This query accesses {len(tables_list)} table(s):\n"
-        for i, table in enumerate(tables_list[:5], 1):
-            explanation += f"{i}. `{table}`\n"
-        if len(tables_list) > 5:
-            explanation += f"... and {len(tables_list) - 5} more tables\n"
-    
-    # Operations
-    explanation += f"\n**Operations:**\n\n"
-    
-    if len(analysis.get('joins', [])) > 0:
-        explanation += f"- **{len(analysis['joins'])} table join(s)**: "
-        explanation += "Combines data from multiple sources using relational keys.\n"
-    
-    if analysis.get('has_subquery'):
-        explanation += "- **Subqueries**: Uses nested queries for complex data filtering.\n"
-    
-    if analysis.get('has_group_by'):
-        explanation += "- **Aggregation**: Groups and summarizes data for reporting.\n"
-    
-    if analysis.get('where_conditions'):
-        explanation += "- **Filtering**: Applies business rules to select relevant records.\n"
-    
-    # Performance considerations
-    explanation += f"\n**Performance Considerations:**\n\n"
-    
-    if complexity == 'High':
-        explanation += "⚠️ This is a complex query. Ensure proper indexing on join columns. "
-        explanation += "Consider reviewing execution plan for optimization opportunities.\n"
-    elif complexity == 'Medium':
-        explanation += "ℹ️ Moderate complexity. Standard indexing should provide good performance. "
-        explanation += "Monitor execution time during peak loads.\n"
-    else:
-        explanation += "✓ Simple query structure. Should execute efficiently with basic indexing.\n"
-    
-    # Recommendations
-    if len(tables_list) > 5:
-        explanation += "\n💡 **Tip**: With {} tables, verify that all joins are necessary and properly indexed.".format(len(tables_list))
-    
-    return explanation
-
-# ========================================================
-# SQL ANALYSIS (CPU-FRIENDLY)
-# ========================================================
-
-def analyze_sql_query(raw_sql):
-    """Analyze SQL query structure without heavy parsing"""
-    
-    analysis = {
-        'tables': [],
-        'columns': [],
-        'joins': [],
-        'where_conditions': '',
-        'has_subquery': False,
-        'has_union': False,
-        'has_group_by': False,
-        'has_order_by': False,
-        'complexity': 'Low'
-    }
-    
-    if not raw_sql or not isinstance(raw_sql, str):
-        return analysis
-    
-    sql_upper = raw_sql.upper()
-    
-    # Basic pattern extraction (lightweight, no heavy parsing)
-    # Extract tables
-    from_pattern = re.findall(r'FROM\s+([^\s,;()\n]+)', sql_upper, re.IGNORECASE)
-    join_pattern = re.findall(r'JOIN\s+([^\s,;()\n]+)', sql_upper, re.IGNORECASE)
-    
-    tables = list(set(from_pattern + join_pattern))
-    analysis['tables'] = [t.strip() for t in tables if t.strip()]
-    
-    # Detect features
-    analysis['has_subquery'] = '(SELECT' in sql_upper or 'WITH ' in sql_upper[:100]
-    analysis['has_union'] = 'UNION' in sql_upper
-    analysis['has_group_by'] = 'GROUP BY' in sql_upper
-    analysis['has_order_by'] = 'ORDER BY' in sql_upper
-    
-    # Count joins
-    analysis['joins'] = re.findall(r'\bJOIN\b', sql_upper, re.IGNORECASE)
-    
-    # Extract WHERE clause (simplified)
-    where_match = re.search(r'WHERE\s+(.+?)(?:GROUP BY|ORDER BY|LIMIT|$)', sql_upper, re.IGNORECASE | re.DOTALL)
-    if where_match:
-        analysis['where_conditions'] = where_match.group(1)[:200]  # Limit length
-    
-    # Complexity scoring
-    complexity_score = 0
-    complexity_score += len(analysis['tables']) * 2
-    complexity_score += len(analysis['joins']) * 3
-    complexity_score += 10 if analysis['has_subquery'] else 0
-    complexity_score += 5 if analysis['has_group_by'] else 0
-    complexity_score += 5 if analysis['has_union'] else 0
-    
-    if complexity_score < 10:
-        analysis['complexity'] = 'Low'
-    elif complexity_score < 25:
-        analysis['complexity'] = 'Medium'
-    else:
-        analysis['complexity'] = 'High'
-    
-    return analysis
 
 def clean_column_name(col):
-    """Clean column names"""
+    """Clean column names for consistent access"""
     return str(col).strip().lower().replace(" ", "_").replace("/", "_").replace("-", "_").replace("(", "").replace(")", "").strip("_")
 
 def safe_get(row, column, default=""):
@@ -446,1731 +43,550 @@ def safe_get(row, column, default=""):
     except:
         return default
 
-def normalize_text(text):
-    """Normalize text for matching"""
-    if not isinstance(text, str):
-        return ""
-    return text.lower().replace("_", "").replace(" ", "").replace("-", "").strip()
-
 # ========================================================
-# DATA LOADING - YOUR SPECIFIC STRUCTURE
+# ENTITY MODEL LOADER
 # ========================================================
 
-def load_interface_inventory(file):
-    """Load interface inventory - YOUR SPECIFIC COLUMNS"""
+def load_entity_model_reference(file):
+    """
+    Load Entity Model Reference Excel
     
-    st.info("🔍 Loading Interface Inventory with your column structure...")
+    Expected structure:
+    - Sheet 1: "Entity Matrix" - List of all entities and relationships
+    - Other Sheets: Individual entity models (e.g., "Account", "Transaction")
+      - Columns: Source Field, Field Description, DW Column Name (or similar)
     
-    # Try different sheet names
-    for sheet in ["interface", "Interface", "Sheet1", "Interfaces"]:
-        try:
-            df = pd.read_excel(file, sheet_name=sheet)
-            st.success(f"✅ Found sheet: '{sheet}'")
-            break
-        except:
-            continue
-    else:
-        df = pd.read_excel(file)
-        st.info("✅ Loaded from first sheet")
+    Returns:
+        entity_matrix_df: DataFrame with entity matrix
+        entity_models: Dict of {entity_name: DataFrame with field mappings}
+    """
     
-    # Show original columns
-    with st.expander("📋 Original Columns Detected"):
-        st.write(list(df.columns))
+    st.info("📚 Loading Entity Model Reference...")
     
-    # Clean column names
-    df.columns = [clean_column_name(col) for col in df.columns]
-    
-    # Remove empty columns
-    df = df.dropna(axis=1, how='all')
-    df = df.loc[:, ~df.columns.str.contains("^unnamed", case=False)]
-    
-    # Map YOUR specific columns
-    column_mappings = {
-        'application': ['application', 'app'],
-        'integration': ['integration', 'interface'],
-        'description': ['description', 'desc'],
-        'type': ['type'],
-        'source_system': ['source_system', 'source'],
-        'target_system': ['target_system', 'target'],
-        'inbound_outbound': ['inbound_outbound_with_respect_to_existing_acct_platform', 'inbound_outbound', 'direction'],
-        'feed_routing': ['feed_routing', 'routing'],
-        'frequency': ['frequency'],
-        'owner': ['application_owner_contact', 'owner', 'contact']
-    }
-    
-    for std_name, variations in column_mappings.items():
-        for var in variations:
-            if var in df.columns and std_name not in df.columns:
-                df[std_name] = df[var]
+    try:
+        # Read all sheet names
+        excel_file = pd.ExcelFile(file)
+        sheet_names = excel_file.sheet_names
+        
+        st.write(f"✅ Found {len(sheet_names)} sheets")
+        
+        # First sheet is Entity Matrix
+        entity_matrix = None
+        matrix_sheet_name = None
+        
+        for sheet in ["Entity Matrix", "entity matrix", "Matrix", "matrix", "Sheet1"]:
+            if sheet in sheet_names:
+                entity_matrix = pd.read_excel(file, sheet_name=sheet)
+                matrix_sheet_name = sheet
+                st.success(f"✅ Loaded Entity Matrix from sheet: '{sheet}'")
                 break
-    
-    # Ensure minimum required columns
-    required = ['application', 'integration', 'source_system', 'target_system']
-    missing = [col for col in required if col not in df.columns]
-    
-    if missing:
-        st.error(f"❌ Missing required columns: {', '.join(missing)}")
-        st.write("Available columns:", list(df.columns))
-        return None
-    
-    # Clean strings
-    for col in df.select_dtypes(include=['object']).columns:
-        df[col] = df[col].astype(str).str.strip().replace({'nan': '', 'None': '', 'NaN': ''})
-    
-    # Show mapped columns
-    with st.expander("✅ Mapped Columns"):
-        st.write({k: v for k, v in column_mappings.items() if k in df.columns})
-    
-    return df
-
-def load_sql_metadata(file):
-    """Load SQL metadata - YOUR SPECIFIC COLUMNS"""
-    
-    st.info("🔍 Loading SQL Metadata with your column structure...")
-    
-    for sheet in ["Queries", "Sheet1", "SQL", "Output"]:
-        try:
-            df = pd.read_excel(file, sheet_name=sheet)
-            st.success(f"✅ Found sheet: '{sheet}'")
-            break
-        except:
-            continue
-    else:
-        df = pd.read_excel(file)
-        st.info("✅ Loaded from first sheet")
-    
-    # Show original columns
-    with st.expander("📋 SQL Original Columns"):
-        st.write(list(df.columns))
-    
-    # Clean columns
-    df.columns = [clean_column_name(col) for col in df.columns]
-    
-    # Map columns
-    mappings = {
-        'system': ['system'],
-        'file': ['file'],
-        'queryname': ['queryname', 'query_name', 'query'],
-        'tables': ['tables', 'table']
-    }
-    
-    for std, vars in mappings.items():
-        for v in vars:
-            if v in df.columns and std not in df.columns:
-                df[std] = df[v]
-                break
-    
-    # Check required
-    required = ['queryname']
-    missing = [col for col in required if col not in df.columns]
-    
-    if missing:
-        st.error(f"❌ Missing required SQL columns: {', '.join(missing)}")
-        return None
-    
-    # Clean strings
-    for col in df.select_dtypes(include=['object']).columns:
-        df[col] = df[col].astype(str).str.strip().replace({'nan': '', 'None': ''})
-    
-    return df
-
-# ========================================================
-# ENHANCED SEMANTIC MATCHING ENGINE
-# ========================================================
-
-def calculate_enhanced_match_score(interface_row, sql_row, use_semantic=True):
-    """
-    OPTIMIZED MATCHING - HIGHEST PRIORITY:
-    Interface: Description, Application, Integration
-    SQL: File, QueryName
-    """
-    
-    score = 0
-    details = []
-    
-    # Extract key fields
-    application = normalize_text(safe_get(interface_row, 'application'))
-    integration = normalize_text(safe_get(interface_row, 'integration'))
-    description = normalize_text(safe_get(interface_row, 'description'))
-    
-    queryname = normalize_text(safe_get(sql_row, 'queryname'))
-    sql_file = normalize_text(safe_get(sql_row, 'file'))
-    
-    # === PRIORITY MATCHING: Description/Application/Integration vs File/QueryName ===
-    # Total: 80 points for primary matching
-    
-    # 1. APPLICATION MATCHING (30 points)
-    if application:
-        app_words = set(application.split())  # Define at the start
         
-        # Application in QueryName (20 points)
-        if queryname and (application in queryname or queryname in application):
-            score += 20
-            details.append(f"✓ Application '{application}' in QueryName")
-        elif queryname:
-            # Partial word match
-            query_words = set(queryname.split())
-            common = app_words & query_words
-            if common:
-                score += min(len(common) * 5, 15)
-                details.append(f"✓ Application words in QueryName ({len(common)})")
+        if entity_matrix is None:
+            # Use first sheet
+            entity_matrix = pd.read_excel(file, sheet_name=0)
+            matrix_sheet_name = sheet_names[0]
+            st.info(f"ℹ️ Using first sheet as Entity Matrix: '{matrix_sheet_name}'")
         
-        # Application in File (10 points)
-        if sql_file and (application in sql_file or sql_file in application):
-            score += 10
-            details.append(f"✓ Application '{application}' in File")
-        elif sql_file:
-            # Partial word match
-            file_words = set(sql_file.split())
-            common = app_words & file_words
-            if common:
-                score += min(len(common) * 3, 8)
-                details.append(f"✓ Application words in File ({len(common)})")
-    
-    # 2. INTEGRATION MATCHING (30 points)
-    if integration:
-        int_words = set(integration.split())  # Define at the start
+        # Clean entity matrix
+        entity_matrix.columns = [clean_column_name(col) for col in entity_matrix.columns]
+        entity_matrix = entity_matrix.dropna(axis=1, how='all')
+        entity_matrix = entity_matrix.loc[:, ~entity_matrix.columns.str.contains("^unnamed", case=False)]
         
-        # Integration in QueryName (20 points)
-        if queryname and (integration in queryname or queryname in integration):
-            score += 20
-            details.append(f"✓ Integration '{integration}' in QueryName")
-        elif queryname:
-            # Word-level matching
-            query_words = set(queryname.split())
-            common = int_words & query_words
-            if common:
-                score += min(len(common) * 5, 15)
-                details.append(f"✓ Integration words in QueryName ({len(common)})")
+        # Show detected columns
+        with st.expander("📋 Entity Matrix Columns Detected", expanded=False):
+            st.write("Columns found:", list(entity_matrix.columns))
+            st.write(f"Rows: {len(entity_matrix)}")
         
-        # Integration in File (10 points)
-        if sql_file and (integration in sql_file or sql_file in integration):
-            score += 10
-            details.append(f"✓ Integration '{integration}' in File")
-        elif sql_file:
-            # Partial word match
-            file_words = set(sql_file.split())
-            common = int_words & file_words
-            if common:
-                score += min(len(common) * 3, 8)
-                details.append(f"✓ Integration words in File ({len(common)})")
-    
-    # 3. DESCRIPTION MATCHING (20 points)
-    if description:
-        desc_words = set(description.split())
+        # Load all other sheets as entity models
+        entity_models = {}
         
-        # Description keywords in QueryName (10 points)
-        if queryname:
-            query_words = set(queryname.split())
-            common = desc_words & query_words
-            if common:
-                score += min(len(common) * 2, 10)
-                details.append(f"✓ Description words in QueryName ({len(common)})")
-        
-        # Description keywords in File (10 points)
-        if sql_file:
-            file_words = set(sql_file.split())
-            common = desc_words & file_words
-            if common:
-                score += min(len(common) * 2, 10)
-                details.append(f"✓ Description words in File ({len(common)})")
-    
-    # === SECONDARY MATCHING: System/Type ===
-    # Total: 20 points for supporting evidence
-    
-    # 4. System Matching (15 points)
-    source_sys = normalize_text(safe_get(interface_row, 'source_system'))
-    sql_sys = normalize_text(safe_get(sql_row, 'system'))
-    
-    if source_sys and sql_sys:
-        if source_sys == sql_sys:
-            score += 15
-            details.append(f"✓ System match: {source_sys}")
-        elif source_sys in sql_sys or sql_sys in source_sys:
-            score += 10
-            details.append(f"✓ Partial system match")
-    
-    # 5. Type/Format Hints (5 points)
-    int_type = normalize_text(safe_get(interface_row, 'type'))
-    if int_type and 'sql' in int_type:
-        if (sql_file and 'sql' in sql_file) or (queryname and 'query' in queryname):
-            score += 5
-            details.append(f"✓ Type indicator: SQL")
-    
-    # === SEMANTIC BOOST (FOCUSED ON KEY FIELDS) ===
-    # Use ONLY the priority fields for semantic matching
-    
-    semantic_score = 0
-    if use_semantic and embedding_model:
-        try:
-            # Build focused text - ONLY priority fields
-            interface_text = f"{application} {integration} {description}".strip()
-            sql_text = f"{queryname} {sql_file}".strip()
-            
-            if interface_text and sql_text:
-                # Calculate semantic similarity
-                int_emb = embedding_model.encode(interface_text, convert_to_tensor=True)
-                sql_emb = embedding_model.encode(sql_text, convert_to_tensor=True)
+        for sheet_name in sheet_names:
+            # Skip the matrix sheet
+            if sheet_name == matrix_sheet_name:
+                continue
                 
-                similarity = util.cos_sim(int_emb, sql_emb).item()
+            try:
+                df = pd.read_excel(file, sheet_name=sheet_name)
                 
-                # Semantic score (0-50 points for very high similarity)
-                if similarity >= 0.85:
-                    semantic_score = 50
-                    details.append(f"🤖 Excellent semantic match ({similarity:.2f})")
-                elif similarity >= 0.75:
-                    semantic_score = 40
-                    details.append(f"🤖 Very high semantic match ({similarity:.2f})")
-                elif similarity >= 0.65:
-                    semantic_score = 30
-                    details.append(f"🤖 High semantic match ({similarity:.2f})")
-                elif similarity >= 0.55:
-                    semantic_score = 20
-                    details.append(f"🤖 Good semantic match ({similarity:.2f})")
-                elif similarity >= 0.45:
-                    semantic_score = 10
-                    details.append(f"🤖 Moderate semantic match ({similarity:.2f})")
-        except Exception as e:
-            pass  # Silent fail for semantic errors
-    
-    final_score = min(score + semantic_score, 100)
-    
-    return final_score, details, semantic_score
-
-def generate_enhanced_mapping(interface_df, sql_df, min_score=45, use_semantic=True):
-    """Generate enhanced semantic mapping with optimized batch processing"""
-    
-    results = []
-    
-    st.write(f"🔄 Starting mapping generation...")
-    st.write(f"   Interfaces: {len(interface_df)}")
-    st.write(f"   SQL Queries: {len(sql_df)}")
-    st.write(f"   Semantic Matching: {'✅ Enabled' if use_semantic and embedding_model else '❌ Disabled'}")
-    st.write(f"   Minimum Score: {min_score}")
-    
-    # ========================================================
-    # OPTIMIZATION: Pre-compute all embeddings in batch
-    # ========================================================
-    
-    interface_embeddings = None
-    sql_embeddings = None
-    
-    if use_semantic and embedding_model:
-        st.write("🚀 Optimizing: Pre-computing embeddings in batches...")
-        
-        try:
-            # Build interface texts (batch)
-            interface_texts = []
-            for _, row in interface_df.iterrows():
-                application = safe_get(row, 'application', '')
-                integration = safe_get(row, 'integration', '')
-                description = safe_get(row, 'description', '')
-                text = f"{application} {integration} {description}".strip()
-                interface_texts.append(text if text else "unknown")
-            
-            # Build SQL texts (batch)
-            sql_texts = []
-            for _, row in sql_df.iterrows():
-                queryname = safe_get(row, 'queryname', '')
-                sql_file = safe_get(row, 'file', '')
-                text = f"{queryname} {sql_file}".strip()
-                sql_texts.append(text if text else "unknown")
-            
-            # Compute ALL embeddings at once (MUCH faster)
-            st.write(f"   Computing {len(interface_texts)} interface embeddings...")
-            interface_embeddings = embedding_model.encode(
-                interface_texts, 
-                batch_size=32,
-                show_progress_bar=False,
-                convert_to_numpy=True  # Use numpy for faster comparison
-            )
-            
-            st.write(f"   Computing {len(sql_texts)} SQL embeddings...")
-            sql_embeddings = embedding_model.encode(
-                sql_texts,
-                batch_size=32, 
-                show_progress_bar=False,
-                convert_to_numpy=True
-            )
-            
-            st.success("✅ Embeddings pre-computed! Matching will be MUCH faster now.")
-            
-        except Exception as e:
-            st.warning(f"⚠️ Could not pre-compute embeddings: {e}")
-            st.info("Falling back to deterministic matching only")
-            use_semantic = False
-    
-    # ========================================================
-    # MATCHING WITH PRE-COMPUTED EMBEDDINGS
-    # ========================================================
-    
-    progress = st.progress(0)
-    status = st.empty()
-    
-    total = len(interface_df)
-    matched_count = 0
-    
-    for idx, (i_idx, i_row) in enumerate(interface_df.iterrows()):
-        progress.progress((idx + 1) / total)
-        
-        if idx % 50 == 0:  # Update status every 50 interfaces
-            status.text(f"Processing interface {idx + 1} of {total}... (Found {matched_count} matches)")
-        
-        for s_idx, s_row in sql_df.iterrows():
-            # Calculate deterministic score (fast)
-            final_score, match_details, _ = calculate_enhanced_match_score_fast(
-                i_row, s_row, use_semantic=False
-            )
-            
-            # Add semantic score if enabled (now MUCH faster)
-            semantic_score = 0
-            if use_semantic and interface_embeddings is not None:
-                try:
-                    # Use pre-computed embeddings (just dot product, super fast!)
-                    similarity = np.dot(interface_embeddings[idx], sql_embeddings[s_idx])
-                    
-                    # Score based on similarity
-                    if similarity >= 0.85:
-                        semantic_score = 50
-                        match_details.append(f"🤖 Excellent semantic match ({similarity:.2f})")
-                    elif similarity >= 0.75:
-                        semantic_score = 40
-                        match_details.append(f"🤖 Very high semantic match ({similarity:.2f})")
-                    elif similarity >= 0.65:
-                        semantic_score = 30
-                        match_details.append(f"🤖 High semantic match ({similarity:.2f})")
-                    elif similarity >= 0.55:
-                        semantic_score = 20
-                        match_details.append(f"🤖 Good semantic match ({similarity:.2f})")
-                    elif similarity >= 0.45:
-                        semantic_score = 10
-                        match_details.append(f"🤖 Moderate semantic match ({similarity:.2f})")
-                except:
-                    pass
-            
-            final_score = min(final_score + semantic_score, 100)
-            
-            if final_score >= min_score:
-                matched_count += 1
+                # Clean columns
+                df.columns = [clean_column_name(col) for col in df.columns]
+                df = df.dropna(axis=1, how='all')
+                df = df.loc[:, ~df.columns.str.contains("^unnamed", case=False)]
                 
-                # Determine confidence
-                if final_score >= 85:
-                    confidence = "High"
-                elif final_score >= 70:
-                    confidence = "Medium"
-                else:
-                    confidence = "Low"
+                # Remove empty rows
+                df = df.dropna(how='all')
                 
-                results.append({
-                    'application': safe_get(i_row, 'application'),
-                    'integration': safe_get(i_row, 'integration'),
-                    'description': safe_get(i_row, 'description'),
-                    'type': safe_get(i_row, 'type'),
-                    'source_system': safe_get(i_row, 'source_system'),
-                    'target_system': safe_get(i_row, 'target_system'),
-                    'inbound_outbound': safe_get(i_row, 'inbound_outbound'),
-                    'sql_system': safe_get(s_row, 'system'),
-                    'sql_file': safe_get(s_row, 'file'),
-                    'queryname': safe_get(s_row, 'queryname'),
-                    'tables': safe_get(s_row, 'tables'),
-                    'deterministic_score': final_score - semantic_score,
-                    'semantic_score': semantic_score,
-                    'final_score': final_score,
-                    'confidence': confidence,
-                    'match_details': '; '.join(match_details)
-                })
-    
-    progress.empty()
-    status.empty()
-    
-    st.success(f"✅ Mapping complete! Found {matched_count} matches")
-    
-    df = pd.DataFrame(results)
-    
-    # Ensure all required columns
-    if df.empty:
-        st.warning("⚠️ No matches found. Try lowering the minimum score.")
-        df = pd.DataFrame(columns=[
-            'application', 'integration', 'description', 'type',
-            'source_system', 'target_system', 'inbound_outbound',
-            'sql_system', 'sql_file', 'queryname', 'tables',
-            'deterministic_score', 'semantic_score', 'final_score',
-            'confidence', 'match_details'
-        ])
-    
-    return df
+                # Clean strings
+                for col in df.select_dtypes(include=['object']).columns:
+                    df[col] = df[col].astype(str).str.strip()
+                    df[col] = df[col].replace({'nan': '', 'None': '', 'NaN': ''})
+                
+                # Store entity model
+                entity_models[sheet_name] = df
+                st.success(f"✅ Loaded entity: **{sheet_name}** ({len(df)} fields)")
+                
+            except Exception as e:
+                st.warning(f"⚠️ Could not load sheet '{sheet_name}': {e}")
+        
+        st.success(f"✅ **Total: {len(entity_models)} entity models loaded**")
+        
+        return entity_matrix, entity_models
+        
+    except Exception as e:
+        st.error(f"❌ Error loading Entity Model Reference: {e}")
+        return None, {}
 
-def calculate_enhanced_match_score_fast(interface_row, sql_row, use_semantic=False):
+# ========================================================
+# ENTITY RELATIONSHIP DIAGRAM
+# ========================================================
+
+def create_entity_relationship_diagram(entity_matrix_df, entity_models):
     """
-    Fast version - only deterministic matching
-    Semantic matching done separately with pre-computed embeddings
-    """
-    
-    score = 0
-    details = []
-    
-    # Extract key fields
-    application = normalize_text(safe_get(interface_row, 'application'))
-    integration = normalize_text(safe_get(interface_row, 'integration'))
-    description = normalize_text(safe_get(interface_row, 'description'))
-    
-    queryname = normalize_text(safe_get(sql_row, 'queryname'))
-    sql_file = normalize_text(safe_get(sql_row, 'file'))
-    
-    # === PRIMARY MATCHING (80 points) ===
-    
-    # 1. APPLICATION MATCHING (30 points)
-    if application:
-        app_words = set(application.split())
-        
-        if queryname and (application in queryname or queryname in application):
-            score += 20
-            details.append(f"✓ Application '{application}' in QueryName")
-        elif queryname:
-            query_words = set(queryname.split())
-            common = app_words & query_words
-            if common:
-                score += min(len(common) * 5, 15)
-                details.append(f"✓ Application words in QueryName ({len(common)})")
-        
-        if sql_file and (application in sql_file or sql_file in application):
-            score += 10
-            details.append(f"✓ Application '{application}' in File")
-        elif sql_file:
-            file_words = set(sql_file.split())
-            common = app_words & file_words
-            if common:
-                score += min(len(common) * 3, 8)
-                details.append(f"✓ Application words in File ({len(common)})")
-    
-    # 2. INTEGRATION MATCHING (30 points)
-    if integration:
-        int_words = set(integration.split())
-        
-        if queryname and (integration in queryname or queryname in integration):
-            score += 20
-            details.append(f"✓ Integration '{integration}' in QueryName")
-        elif queryname:
-            query_words = set(queryname.split())
-            common = int_words & query_words
-            if common:
-                score += min(len(common) * 5, 15)
-                details.append(f"✓ Integration words in QueryName ({len(common)})")
-        
-        if sql_file and (integration in sql_file or sql_file in integration):
-            score += 10
-            details.append(f"✓ Integration '{integration}' in File")
-        elif sql_file:
-            file_words = set(sql_file.split())
-            common = int_words & file_words
-            if common:
-                score += min(len(common) * 3, 8)
-                details.append(f"✓ Integration words in File ({len(common)})")
-    
-    # 3. DESCRIPTION MATCHING (20 points)
-    if description:
-        desc_words = set(description.split())
-        
-        if queryname:
-            query_words = set(queryname.split())
-            common = desc_words & query_words
-            if common:
-                score += min(len(common) * 2, 10)
-                details.append(f"✓ Description words in QueryName ({len(common)})")
-        
-        if sql_file:
-            file_words = set(sql_file.split())
-            common = desc_words & file_words
-            if common:
-                score += min(len(common) * 2, 10)
-                details.append(f"✓ Description words in File ({len(common)})")
-    
-    # === SECONDARY MATCHING (20 points) ===
-    
-    # 4. System Matching (15 points)
-    source_sys = normalize_text(safe_get(interface_row, 'source_system'))
-    sql_sys = normalize_text(safe_get(sql_row, 'system'))
-    
-    if source_sys and sql_sys:
-        if source_sys == sql_sys:
-            score += 15
-            details.append(f"✓ System match: {source_sys}")
-        elif source_sys in sql_sys or sql_sys in source_sys:
-            score += 10
-            details.append(f"✓ Partial system match")
-    
-    # 5. Type/Format Hints (5 points)
-    int_type = normalize_text(safe_get(interface_row, 'type'))
-    if int_type and 'sql' in int_type:
-        if (sql_file and 'sql' in sql_file) or (queryname and 'query' in queryname):
-            score += 5
-            details.append(f"✓ Type indicator: SQL")
-    
-    return score, details, 0  # semantic_score returned as 0 (calculated separately)
-
-# ========================================================
-# FILTERING
-# ========================================================
-
-def apply_global_filters(df):
-    """Apply global filters"""
-    if df is None or df.empty:
-        return df
-    
-    filtered = df.copy()
-    
-    if st.session_state.filter_source_systems and 'source_system' in filtered.columns:
-        filtered = filtered[filtered['source_system'].isin(st.session_state.filter_source_systems)]
-    
-    if st.session_state.filter_target_systems and 'target_system' in filtered.columns:
-        filtered = filtered[filtered['target_system'].isin(st.session_state.filter_target_systems)]
-    
-    if st.session_state.filter_types and 'type' in filtered.columns:
-        filtered = filtered[filtered['type'].isin(st.session_state.filter_types)]
-    
-    if st.session_state.filter_applications and 'application' in filtered.columns:
-        filtered = filtered[filtered['application'].isin(st.session_state.filter_applications)]
-    
-    return filtered
-
-def get_active_filter_count():
-    """Count active filters"""
-    count = 0
-    count += len(st.session_state.filter_source_systems)
-    count += len(st.session_state.filter_target_systems)
-    count += len(st.session_state.filter_types)
-    count += len(st.session_state.filter_applications)
-    return count
-
-def clear_all_filters():
-    """Clear all filters"""
-    st.session_state.filter_source_systems = []
-    st.session_state.filter_target_systems = []
-    st.session_state.filter_types = []
-    st.session_state.filter_applications = []
-
-# Continue in next message due to length...
-
-# ========================================================
-# INTERACTIVE VISUAL GRAPH GENERATION
-# ========================================================
-
-def create_system_network_graph(interface_df):
-    """
-    Create interactive network graph of system connections
-    Returns Plotly figure
+    Create interactive ERD from entity matrix
+    Shows entities as nodes, relationships as edges
     """
     
     if not PLOTLY_AVAILABLE:
+        st.warning("⚠️ Plotly not available. Install: pip install plotly networkx")
         return None
     
-    # Build network graph using NetworkX
-    G = nx.DiGraph()
-    
-    # Count connections between systems
-    connections = defaultdict(lambda: {'count': 0, 'dispositions': defaultdict(int)})
-    
-    for _, row in interface_df.iterrows():
-        source = safe_get(row, 'source_system', 'Unknown')
-        target = safe_get(row, 'target_system', 'Unknown')
-        disposition = safe_get(row, 'disposition', 'Unknown')
+    try:
+        G = nx.Graph()
         
-        if source and target:
-            key = (source, target)
-            connections[key]['count'] += 1
-            connections[key]['dispositions'][disposition] += 1
-    
-    # Add nodes and edges
-    for (source, target), data in connections.items():
-        G.add_edge(source, target, weight=data['count'], dispositions=data['dispositions'])
-    
-    # Use spring layout for positioning
-    pos = nx.spring_layout(G, k=2, iterations=50)
-    
-    # Create edge traces
-    edge_traces = []
-    
-    for edge in G.edges():
-        source, target = edge
-        x0, y0 = pos[source]
-        x1, y1 = pos[target]
+        # Method 1: Parse entity matrix for relationships
+        entities = set()
+        edges = []
         
-        weight = G[source][target]['weight']
+        # Try to find entity columns in matrix
+        entity_cols = [col for col in entity_matrix_df.columns if any(x in col for x in ['entity', 'table', 'name'])]
         
-        # Create edge line
+        if len(entity_cols) >= 2:
+            # Found relationship columns
+            for _, row in entity_matrix_df.iterrows():
+                entity1 = safe_get(row, entity_cols[0])
+                entity2 = safe_get(row, entity_cols[1]) if len(entity_cols) > 1 else None
+                
+                if entity1:
+                    entities.add(entity1)
+                if entity2 and entity2 != entity1:
+                    entities.add(entity2)
+                    edges.append((entity1, entity2))
+        
+        # Method 2: Use entity model sheet names
+        if not entities:
+            entities = set(entity_models.keys())
+        
+        # Add all entities as nodes
+        for entity in entities:
+            field_count = len(entity_models.get(entity, pd.DataFrame()))
+            G.add_node(entity, fields=field_count)
+        
+        # Add edges
+        for e1, e2 in edges:
+            if e1 in G.nodes() and e2 in G.nodes():
+                G.add_edge(e1, e2)
+        
+        # Layout
+        pos = nx.spring_layout(G, k=3, iterations=50)
+        
+        # Create edge traces
+        edge_x = []
+        edge_y = []
+        
+        for edge in G.edges():
+            x0, y0 = pos[edge[0]]
+            x1, y1 = pos[edge[1]]
+            edge_x.extend([x0, x1, None])
+            edge_y.extend([y0, y1, None])
+        
         edge_trace = go.Scatter(
-            x=[x0, x1, None],
-            y=[y0, y1, None],
-            mode='lines',
-            line=dict(width=min(weight * 0.5, 10), color='#888'),
-            hoverinfo='text',
-            text=f'{source} → {target}<br>{weight} interface(s)',
-            showlegend=False
+            x=edge_x,
+            y=edge_y,
+            line=dict(width=2, color='#888'),
+            hoverinfo='none',
+            mode='lines'
         )
-        edge_traces.append(edge_trace)
         
-        # Add arrow annotation
-        # Calculate arrow position (80% along the edge)
-        arrow_x = x0 + 0.8 * (x1 - x0)
-        arrow_y = y0 + 0.8 * (y1 - y0)
-    
-    # Create node trace
-    node_x = []
-    node_y = []
-    node_text = []
-    node_size = []
-    node_color = []
-    
-    for node in G.nodes():
-        x, y = pos[node]
-        node_x.append(x)
-        node_y.append(y)
+        # Create node traces
+        node_x = []
+        node_y = []
+        node_text = []
+        node_size = []
+        node_hover = []
         
-        # Calculate node metrics
-        outgoing = len(list(G.successors(node)))
-        incoming = len(list(G.predecessors(node)))
-        total_interfaces = sum([G[node][succ]['weight'] for succ in G.successors(node)]) if outgoing > 0 else 0
-        total_interfaces += sum([G[pred][node]['weight'] for pred in G.predecessors(node)]) if incoming > 0 else 0
+        for node in G.nodes():
+            x, y = pos[node]
+            node_x.append(x)
+            node_y.append(y)
+            node_text.append(node)
+            
+            field_count = G.nodes[node].get('fields', 0)
+            node_size.append(max(40, field_count * 2))
+            
+            hover_text = f"<b>{node}</b><br>"
+            hover_text += f"Fields: {field_count}<br>"
+            hover_text += f"Connections: {len(list(G.neighbors(node)))}"
+            node_hover.append(hover_text)
         
-        # Get disposition breakdown
-        retain = replace = tbd = 0
-        for succ in G.successors(node):
-            disps = G[node][succ].get('dispositions', {})
-            for disp, count in disps.items():
-                if 'retain' in disp.lower():
-                    retain += count
-                elif 'replace' in disp.lower():
-                    replace += count
-                else:
-                    tbd += count
+        node_trace = go.Scatter(
+            x=node_x,
+            y=node_y,
+            mode='markers+text',
+            hoverinfo='text',
+            text=node_text,
+            hovertext=node_hover,
+            textposition="top center",
+            marker=dict(
+                size=node_size,
+                color='#9C27B0',
+                line=dict(width=2, color='white')
+            ),
+            textfont=dict(size=10, color='black')
+        )
         
-        for pred in G.predecessors(node):
-            disps = G[pred][node].get('dispositions', {})
-            for disp, count in disps.items():
-                if 'retain' in disp.lower():
-                    retain += count
-                elif 'replace' in disp.lower():
-                    replace += count
-                else:
-                    tbd += count
+        # Create figure
+        fig = go.Figure(data=[edge_trace, node_trace])
         
-        # Node size based on interface count
-        node_size.append(max(20 + total_interfaces * 2, 30))
+        fig.update_layout(
+            title={
+                'text': "📊 Entity Relationship Diagram<br><sub>Node size = field count | Click entity name in list below to view details</sub>",
+                'x': 0.5,
+                'xanchor': 'center'
+            },
+            showlegend=False,
+            hovermode='closest',
+            margin=dict(b=20, l=5, r=5, t=80),
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            plot_bgcolor='#f8f9fa',
+            height=600
+        )
         
-        # Node color based on dominant disposition
-        if retain > replace and retain > tbd:
-            node_color.append('#4CAF50')  # Green for Retain
-        elif replace > retain and replace > tbd:
-            node_color.append('#f44336')  # Red for Replace
-        else:
-            node_color.append('#FFC107')  # Yellow for TBD
+        return fig
         
-        # Hover text
-        hover_text = f"<b>{node}</b><br>"
-        hover_text += f"Total Interfaces: {total_interfaces}<br>"
-        hover_text += f"Outgoing: {outgoing} systems<br>"
-        hover_text += f"Incoming: {incoming} systems<br>"
-        hover_text += f"<br><b>Disposition:</b><br>"
-        hover_text += f"Retain: {retain}<br>"
-        hover_text += f"Replace: {replace}<br>"
-        hover_text += f"TBD: {tbd}"
-        
-        node_text.append(hover_text)
-    
-    node_trace = go.Scatter(
-        x=node_x,
-        y=node_y,
-        mode='markers+text',
-        hoverinfo='text',
-        text=[node for node in G.nodes()],
-        hovertext=node_text,
-        textposition="top center",
-        marker=dict(
-            size=node_size,
-            color=node_color,
-            line=dict(width=2, color='white'),
-            opacity=0.9
-        ),
-        textfont=dict(size=10, color='black'),
-        showlegend=False
-    )
-    
-    # Create figure
-    fig = go.Figure(data=edge_traces + [node_trace])
-    
-    fig.update_layout(
-        title={
-            'text': "🌐 System Architecture Network<br><sub>Node size = interface count | Color: Green=Retain, Red=Replace, Yellow=TBD</sub>",
-            'x': 0.5,
-            'xanchor': 'center',
-            'font': {'size': 20}
-        },
-        showlegend=False,
-        hovermode='closest',
-        margin=dict(b=20, l=5, r=5, t=80),
-        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-        plot_bgcolor='#f8f9fa',
-        height=700
-    )
-    
-    return fig
+    except Exception as e:
+        st.error(f"Error creating ERD: {e}")
+        return None
 
-def create_interface_flow_graph(interface_row, matched_sql_df):
+# ========================================================
+# FIELD LINEAGE DIAGRAM
+# ========================================================
+
+def create_field_lineage_diagram(entity_name, entity_df):
     """
-    Create flow diagram for a specific interface
-    Shows: Source → Interface → Target → SQL Queries
+    Create field-level lineage visualization
+    Shows: Source Field → [Transformation] → DW Column
     """
     
-    if not PLOTLY_AVAILABLE:
+    if not PLOTLY_AVAILABLE or entity_df is None or len(entity_df) == 0:
         return None
     
-    source = safe_get(interface_row, 'source_system', 'Source')
-    target = safe_get(interface_row, 'target_system', 'Target')
-    integration = safe_get(interface_row, 'integration', 'Interface')
-    
-    # Create hierarchical layout
-    fig = go.Figure()
-    
-    # Level 1: Source System
-    fig.add_trace(go.Scatter(
-        x=[0],
-        y=[3],
-        mode='markers+text',
-        marker=dict(size=60, color='#2196F3', line=dict(width=2, color='white')),
-        text=[source],
-        textposition="middle center",
-        textfont=dict(size=12, color='white'),
-        hovertext=f"<b>Source System</b><br>{source}",
-        hoverinfo='text',
-        showlegend=False
-    ))
-    
-    # Level 2: Interface
-    disposition = safe_get(interface_row, 'disposition', 'Unknown')
-    int_color = '#4CAF50' if 'retain' in disposition.lower() else '#f44336' if 'replace' in disposition.lower() else '#FFC107'
-    
-    fig.add_trace(go.Scatter(
-        x=[1],
-        y=[3],
-        mode='markers+text',
-        marker=dict(size=80, color=int_color, line=dict(width=2, color='white')),
-        text=[integration[:20]],  # Truncate long names
-        textposition="middle center",
-        textfont=dict(size=10, color='white'),
-        hovertext=f"<b>Interface</b><br>{integration}<br>Disposition: {disposition}",
-        hoverinfo='text',
-        showlegend=False
-    ))
-    
-    # Level 3: Target System
-    fig.add_trace(go.Scatter(
-        x=[2],
-        y=[3],
-        mode='markers+text',
-        marker=dict(size=60, color='#9C27B0', line=dict(width=2, color='white')),
-        text=[target],
-        textposition="middle center",
-        textfont=dict(size=12, color='white'),
-        hovertext=f"<b>Target System</b><br>{target}",
-        hoverinfo='text',
-        showlegend=False
-    ))
-    
-    # Level 4: SQL Queries
-    if matched_sql_df is not None and not matched_sql_df.empty:
-        num_queries = min(len(matched_sql_df), 5)  # Show max 5
-        y_positions = [4 - i * 0.5 for i in range(num_queries)]
+    try:
+        # Detect column names
+        source_col = None
+        target_col = None
+        desc_col = None
         
-        for idx, (_, sql_row) in enumerate(matched_sql_df.head(5).iterrows()):
-            query = safe_get(sql_row, 'queryname', 'Query')
-            confidence = safe_get(sql_row, 'confidence', 'Unknown')
-            score = safe_get(sql_row, 'final_score', 0)
+        for col in entity_df.columns:
+            col_lower = col.lower()
             
-            query_color = '#4CAF50' if confidence == 'High' else '#FFC107' if confidence == 'Medium' else '#f44336'
+            if not source_col and any(x in col_lower for x in ['source', 'field']) and 'dw' not in col_lower:
+                source_col = col
+            elif not target_col and any(x in col_lower for x in ['dw', 'warehouse', 'target', 'map']):
+                target_col = col
+            elif not desc_col and any(x in col_lower for x in ['desc', 'description']):
+                desc_col = col
+        
+        if not source_col or not target_col:
+            st.warning("⚠️ Could not detect source and target field columns")
+            st.write("Available columns:", list(entity_df.columns))
+            return None
+        
+        st.info(f"Using: **{source_col}** → **{target_col}**")
+        
+        # Create visualization
+        fig = go.Figure()
+        
+        num_fields = min(len(entity_df), 15)  # Show max 15
+        
+        for idx, (_, row) in enumerate(entity_df.head(15).iterrows()):
+            source_field = safe_get(row, source_col, f"Field_{idx}")
+            target_field = safe_get(row, target_col, f"DW_{idx}")
+            description = safe_get(row, desc_col, "") if desc_col else ""
             
+            y_pos = 15 - idx
+            
+            # Source field (left)
             fig.add_trace(go.Scatter(
-                x=[3],
-                y=[y_positions[idx]],
+                x=[0],
+                y=[y_pos],
                 mode='markers+text',
-                marker=dict(size=40, color=query_color, line=dict(width=1, color='white')),
-                text=[query[:15]],
-                textposition="middle right",
-                textfont=dict(size=8, color='white'),
-                hovertext=f"<b>SQL Query</b><br>{query}<br>Confidence: {confidence} ({score}%)",
+                marker=dict(size=35, color='#2196F3', line=dict(width=2, color='white')),
+                text=[source_field[:25]],
+                textposition="middle left",
+                textfont=dict(size=9),
+                hovertext=f"<b>Source:</b> {source_field}<br><b>Description:</b> {description}",
                 hoverinfo='text',
                 showlegend=False
             ))
             
-            # Arrow from target to query
+            # Target field (right)
+            fig.add_trace(go.Scatter(
+                x=[2],
+                y=[y_pos],
+                mode='markers+text',
+                marker=dict(size=35, color='#4CAF50', line=dict(width=2, color='white')),
+                text=[target_field[:25]],
+                textposition="middle right",
+                textfont=dict(size=9),
+                hovertext=f"<b>DW Column:</b> {target_field}",
+                hoverinfo='text',
+                showlegend=False
+            ))
+            
+            # Arrow
             fig.add_annotation(
-                x=2.1, y=3,
-                ax=2.9, ay=y_positions[idx],
+                x=0.15, y=y_pos,
+                ax=1.85, ay=y_pos,
                 xref='x', yref='y',
                 axref='x', ayref='y',
                 showarrow=True,
                 arrowhead=2,
                 arrowsize=1,
-                arrowwidth=1,
+                arrowwidth=2,
                 arrowcolor='#888'
             )
-    
-    # Arrows between main nodes
-    for x0, x1 in [(0, 1), (1, 2)]:
-        fig.add_annotation(
-            x=x0 + 0.1, y=3,
-            ax=x1 - 0.1, ay=3,
-            xref='x', yref='y',
-            axref='x', ayref='y',
-            showarrow=True,
-            arrowhead=2,
-            arrowsize=1.5,
-            arrowwidth=2,
-            arrowcolor='#667eea'
-        )
-    
-    fig.update_layout(
-        title={
-            'text': f"📋 {integration} - Data Flow",
-            'x': 0.5,
-            'xanchor': 'center',
-            'font': {'size': 18}
-        },
-        showlegend=False,
-        hovermode='closest',
-        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-0.5, 3.8]),
-        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[0, 5]),
-        plot_bgcolor='white',
-        height=500,
-        margin=dict(l=20, r=150, t=60, b=20)
-    )
-    
-    return fig
-
-# ========================================================
-# NAVIGATION
-# ========================================================
-
-def navigate_to_overview():
-    st.session_state.navigation_level = 'overview'
-    st.session_state.selected_source = None
-    st.session_state.selected_target = None
-    st.session_state.selected_interface = None
-    st.rerun()
-
-def navigate_to_system_pair(source, target):
-    st.session_state.navigation_level = 'system_pair'
-    st.session_state.selected_source = source
-    st.session_state.selected_target = target
-    st.session_state.selected_interface = None
-    st.rerun()
-
-def navigate_to_interface(interface_name):
-    st.session_state.navigation_level = 'interface_detail'
-    st.session_state.selected_interface = interface_name
-    st.rerun()
-
-def navigate_to_sql_detail(query_name):
-    st.session_state.navigation_level = 'sql_detail'
-    st.session_state.selected_sql = query_name
-    st.rerun()
-
-# ========================================================
-# VIEWS (Simplified for length - same as before)
-# ========================================================
-
-# ========================================================
-# NETWORK VISUALIZATION
-# ========================================================
-
-def render_network_graph(df, color_by, show_labels):
-    """Render interactive network graph of interfaces using Plotly"""
-    
-    try:
-        import plotly.graph_objects as go
-        
-        # Build node and edge data
-        nodes = {}
-        edges = {}
-        
-        for _, row in df.iterrows():
-            source = row['source_system']
-            target = row['target_system']
-            
-            # Track nodes
-            nodes[source] = nodes.get(source, {'in': 0, 'out': 0})
-            nodes[target] = nodes.get(target, {'in': 0, 'out': 0})
-            
-            nodes[source]['out'] += 1
-            nodes[target]['in'] += 1
-            
-            # Track edges
-            edge_key = (source, target)
-            edges[edge_key] = edges.get(edge_key, 0) + 1
-        
-        # Simple circular layout
-        import math
-        n = len(nodes)
-        node_list = list(nodes.keys())
-        positions = {}
-        
-        for i, node in enumerate(node_list):
-            angle = 2 * math.pi * i / n
-            positions[node] = (math.cos(angle), math.sin(angle))
-        
-        # Create edge traces
-        edge_traces = []
-        
-        for (source, target), count in edges.items():
-            x0, y0 = positions[source]
-            x1, y1 = positions[target]
-            
-            # Edge color
-            if color_by == "Interface Count":
-                # Color by count (gradient)
-                max_count = max(edges.values())
-                intensity = count / max_count
-                edge_color = f'rgba(102, 126, 234, {0.3 + intensity * 0.7})'
-            else:
-                # Color by source system
-                source_idx = node_list.index(source)
-                colors = ['#667eea', '#764ba2', '#f093fb', '#4facfe', '#00f2fe']
-                edge_color = colors[source_idx % len(colors)]
-            
-            edge_trace = go.Scatter(
-                x=[x0, x1, None],
-                y=[y0, y1, None],
-                mode='lines',
-                line=dict(
-                    width=min(count * 1.5, 8),
-                    color=edge_color
-                ),
-                hoverinfo='text',
-                text=f'{source} → {target}<br>{count} interface(s)',
-                showlegend=False,
-                opacity=0.6
-            )
-            edge_traces.append(edge_trace)
-        
-        # Create node trace
-        node_x = []
-        node_y = []
-        node_text = []
-        node_size = []
-        node_labels = []
-        
-        for node in node_list:
-            x, y = positions[node]
-            node_x.append(x)
-            node_y.append(y)
-            
-            in_count = nodes[node]['in']
-            out_count = nodes[node]['out']
-            total = in_count + out_count
-            
-            node_text.append(f'<b>{node}</b><br>Incoming: {in_count}<br>Outgoing: {out_count}')
-            node_size.append(15 + total * 3)
-            node_labels.append(node)
-        
-        node_trace = go.Scatter(
-            x=node_x,
-            y=node_y,
-            mode='markers+text' if show_labels else 'markers',
-            text=node_labels if show_labels else None,
-            textposition="top center",
-            textfont=dict(size=10, color='#333'),
-            hoverinfo='text',
-            hovertext=node_text,
-            marker=dict(
-                size=node_size,
-                color='#667eea',
-                line=dict(width=2, color='white'),
-                opacity=0.9
-            ),
-            showlegend=False
-        )
-        
-        # Create figure
-        fig = go.Figure(data=edge_traces + [node_trace])
         
         fig.update_layout(
-            title=dict(
-                text="🕸️ System Interface Network - Interactive",
-                font=dict(size=18, color='#667eea'),
-                x=0.5,
-                xanchor='center'
-            ),
-            showlegend=False,
-            hovermode='closest',
-            margin=dict(b=20, l=20, r=20, t=60),
-            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            title=f"🔄 Field Lineage: {entity_name}",
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-0.8, 2.8]),
             yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            height=500,
-            plot_bgcolor='rgba(248, 249, 250, 0.5)',
-            paper_bgcolor='white'
+            height=max(500, num_fields * 40),
+            margin=dict(l=200, r=200, t=60, b=20),
+            plot_bgcolor='white'
         )
         
-        st.plotly_chart(fig, use_container_width=True)
+        return fig
         
-        # Stats and legend
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric("Total Systems", len(nodes))
-        
-        with col2:
-            st.metric("Total Connections", len(edges))
-        
-        with col3:
-            max_interfaces = max(edges.values())
-            busiest = [f"{s}→{t}" for (s,t), c in edges.items() if c == max_interfaces][0]
-            st.metric("Busiest Connection", f"{max_interfaces} interfaces")
-        
-        with st.expander("ℹ️ How to Read the Graph"):
-            st.markdown("""
-            **Visual Guide:**
-            - 🔵 **Nodes (circles)** = Systems
-            - 📏 **Node size** = Number of connections (bigger = more interfaces)
-            - ➡️ **Arrows** = Data flow direction
-            - 📊 **Line thickness** = Number of interfaces
-            - 🎨 **Color** = Intensity or source system
-            - 🖱️ **Hover** over elements for details
-            
-            **Interpretation:**
-            - Large nodes = Hub systems (many connections)
-            - Thick lines = Many interfaces between systems
-            - Hover for exact counts
-            """)
-        
-    except ImportError:
-        st.warning("⚠️ Network visualization requires plotly. Install with: `pip install plotly`")
-        st.info("Showing connection matrix instead:")
-        
-        # Fallback: Connection matrix
-        sources = sorted(df['source_system'].unique())
-        targets = sorted(df['target_system'].unique())
-        
-        matrix_data = []
-        for source in sources:
-            row = {'Source →': source}
-            for target in targets:
-                count = len(df[(df['source_system'] == source) & (df['target_system'] == target)])
-                row[target] = count if count > 0 else "-"
-            matrix_data.append(row)
-        
-        matrix_df = pd.DataFrame(matrix_data)
-        st.dataframe(matrix_df, use_container_width=True, height=400)
+    except Exception as e:
+        st.error(f"Error creating field lineage: {e}")
+        return None
 
 # ========================================================
-# VIEWS
+# ENTITY EXPLORER UI
 # ========================================================
 
-def render_overview():
-    st.markdown('<div class="premium-header"><h1 class="premium-title">🌐 Data Explorer 360°</h1><p class="premium-subtitle">Enhanced Semantic Matching</p></div>', unsafe_allow_html=True)
+def render_entity_explorer(entity_matrix_df, entity_models, selected_entity=None):
+    """
+    Main Entity Explorer UI
+    Can be called from main app or run standalone
     
-    df = apply_global_filters(st.session_state.interface_df)
+    Args:
+        entity_matrix_df: DataFrame with entity matrix
+        entity_models: Dict of entity DataFrames
+        selected_entity: Optional - entity to show details for
+    """
     
-    if df.empty:
-        st.warning("⚠️ No data matches current filters.")
-        return
+    st.markdown("## 📚 Entity Model Explorer")
     
-    col1, col2, col3, col4 = st.columns(4)
+    if entity_matrix_df is None or not entity_models:
+        st.warning("⚠️ No entity models loaded. Upload Entity Model Reference file.")
+        return None
     
-    with col1:
-        st.markdown(f'<div class="metric-card"><div class="metric-value">{len(df)}</div><div class="metric-label">Interfaces</div></div>', unsafe_allow_html=True)
-    
-    with col2:
-        systems = df['source_system'].nunique()
-        st.markdown(f'<div class="metric-card"><div class="metric-value">{systems}</div><div class="metric-label">Systems</div></div>', unsafe_allow_html=True)
-    
-    with col3:
-        if st.session_state.sql_df is not None:
-            st.markdown(f'<div class="metric-card"><div class="metric-value">{len(st.session_state.sql_df)}</div><div class="metric-label">SQL Queries</div></div>', unsafe_allow_html=True)
-    
-    with col4:
-        if st.session_state.mapping_df is not None:
-            mapping_filtered = apply_global_filters(st.session_state.mapping_df)
-            st.markdown(f'<div class="metric-card"><div class="metric-value">{len(mapping_filtered)}</div><div class="metric-label">Mappings</div></div>', unsafe_allow_html=True)
-    
-    st.markdown("---")
-    
-    # ========================================================
-    # INTERACTIVE SYSTEM NETWORK GRAPH
-    # ========================================================
-    
-    if PLOTLY_AVAILABLE and len(df) > 0:
-        st.subheader("🌐 Interactive System Architecture")
-        
-        with st.expander("ℹ️ How to use this graph", expanded=False):
-            st.markdown("""
-            **Interactive Features:**
-            - 🖱️ **Hover** over nodes to see system details
-            - 🔍 **Zoom** in/out using mouse wheel or controls
-            - 👆 **Pan** by clicking and dragging
-            - 💾 **Export** by clicking camera icon (top right of graph)
-            
-            **Visual Legend:**
-            - 🟢 **Green nodes** = Majority Retain interfaces
-            - 🔴 **Red nodes** = Majority Replace interfaces
-            - 🟡 **Yellow nodes** = Majority TBD interfaces
-            - **Node size** = Number of interfaces
-            - **Line thickness** = Number of connections
-            
-            **Tips:**
-            - Larger nodes = more interfaces
-            - Click system names in the table below to drill down
-            - Use global filters (sidebar) to focus on specific systems
-            """)
-        
-        try:
-            fig = create_system_network_graph(df)
-            if fig:
-                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True, 'displaylogo': False})
-                
-                # Export option
-                col1, col2, col3 = st.columns([1, 1, 2])
-                with col1:
-                    if st.button("📥 Export Connections"):
-                        connections = df.groupby(['source_system', 'target_system']).size().reset_index(name='count')
-                        st.download_button(
-                            "Download CSV",
-                            connections.to_csv(index=False),
-                            "system_connections.csv",
-                            "text/csv",
-                            key="download_connections"
-                        )
-            else:
-                st.warning("Could not generate graph")
-        except Exception as e:
-            st.error(f"Error creating graph: {e}")
-            st.info("Make sure libraries are installed: `pip install plotly networkx`")
-    else:
-        if not PLOTLY_AVAILABLE:
-            st.info("📊 **Visual graphs disabled.** Install for interactive visualizations:")
-            st.code("pip install plotly networkx")
-    
-    st.markdown("---")
-    st.subheader("🔗 System Connections")
-    
-    system_pairs = df.groupby(['source_system', 'target_system']).size().reset_index(name='count')
-    system_pairs = system_pairs.sort_values('count', ascending=False)
-    
-    for _, row in system_pairs.iterrows():
-        source = row['source_system']
-        target = row['target_system']
-        count = row['count']
-        
-        col1, col2 = st.columns([4, 1])
-        
-        with col1:
-            st.markdown(f'<div class="interactive-card"><div class="card-title">{source} → {target}</div><div class="card-subtitle">{count} interfaces</div></div>', unsafe_allow_html=True)
-        
-        with col2:
-            if st.button("Drill Down →", key=f"drill_{source}_{target}"):
-                navigate_to_system_pair(source, target)
-
-def render_system_pair():
-    source = st.session_state.selected_source
-    target = st.session_state.selected_target
-    
-    col1, col2 = st.columns([6, 1])
-    with col1:
-        st.markdown(f'<div class="breadcrumb">🏠 Overview → 🔗 {source} → {target}</div>', unsafe_allow_html=True)
-    with col2:
-        if st.button("← Back"):
-            navigate_to_overview()
-    
-    st.markdown(f'<h1 style="color: #667eea;">🔗 {source} → {target}</h1>', unsafe_allow_html=True)
-    
-    df = apply_global_filters(st.session_state.interface_df)
-    filtered = df[(df['source_system'] == source) & (df['target_system'] == target)]
-    
-    if filtered.empty:
-        st.warning("⚠️ No interfaces found for this system pair with current filters.")
-        return
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Interfaces", len(filtered))
-    with col2:
-        if 'application' in filtered.columns:
-            apps = filtered['application'].nunique()
-            st.metric("Applications", apps)
-    with col3:
-        if 'type' in filtered.columns:
-            types = filtered['type'].nunique()
-            st.metric("Types", types)
-    
-    st.markdown("---")
-    st.subheader("📋 Interfaces")
-    
-    for _, row in filtered.iterrows():
-        integration = safe_get(row, 'integration')
-        application = safe_get(row, 'application')
-        desc = safe_get(row, 'description')
-        type_val = safe_get(row, 'type')
-        
-        col1, col2 = st.columns([5, 1])
-        
-        with col1:
-            st.markdown(f'<div class="interactive-card"><div class="card-title">{integration}</div><div class="card-subtitle">App: {application} | {desc[:80]}...</div><div style="margin-top: 0.5rem; color: #666;">Type: {type_val}</div></div>', unsafe_allow_html=True)
-        
-        with col2:
-            if st.button("Details →", key=f"int_{integration}"):
-                navigate_to_interface(integration)
-
-def render_interface_detail():
-    interface = st.session_state.selected_interface
-    source = st.session_state.selected_source
-    target = st.session_state.selected_target
-    
-    col1, col2 = st.columns([6, 1])
-    with col1:
-        st.markdown(f'<div class="breadcrumb">🏠 → 🔗 {source} → {target} → 📋 {interface}</div>', unsafe_allow_html=True)
-    with col2:
-        if st.button("← Back"):
-            navigate_to_system_pair(source, target)
-    
-    st.markdown(f'<h1 style="color: #667eea;">📋 {interface}</h1>', unsafe_allow_html=True)
-    
-    df = st.session_state.interface_df
-    int_row = df[df['integration'] == interface].iloc[0]
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Interface Information")
-        st.write(f"**Application:** {safe_get(int_row, 'application')}")
-        st.write(f"**Integration:** {safe_get(int_row, 'integration')}")
-        st.write(f"**Description:** {safe_get(int_row, 'description')}")
-        st.write(f"**Type:** {safe_get(int_row, 'type')}")
-    
-    with col2:
-        st.subheader("Connection Details")
-        st.write(f"**Source:** {safe_get(int_row, 'source_system')}")
-        st.write(f"**Target:** {safe_get(int_row, 'target_system')}")
-        st.write(f"**Direction:** {safe_get(int_row, 'inbound_outbound')}")
-    
-    # ========================================================
-    # INTERFACE FLOW VISUALIZATION
-    # ========================================================
-    
-    if PLOTLY_AVAILABLE and st.session_state.mapping_df is not None:
-        st.markdown("---")
-        matched_sql_for_graph = st.session_state.mapping_df[
-            st.session_state.mapping_df['integration'] == interface
-        ] if 'integration' in st.session_state.mapping_df.columns else pd.DataFrame()
-        
-        if not matched_sql_for_graph.empty:
-            st.subheader("📊 Interface Data Flow Diagram")
-            try:
-                flow_fig = create_interface_flow_graph(int_row, matched_sql_for_graph)
-                if flow_fig:
-                    st.plotly_chart(flow_fig, use_container_width=True, config={'displayModeBar': False})
-            except Exception as e:
-                st.warning(f"Could not generate flow diagram: {e}")
-    
-    st.markdown("---")
-    
-    if st.session_state.mapping_df is not None and not st.session_state.mapping_df.empty:
-        if 'integration' in st.session_state.mapping_df.columns:
-            matched_sql = st.session_state.mapping_df[
-                st.session_state.mapping_df['integration'] == interface
-            ]
-        else:
-            st.error("⚠️ Please regenerate mapping with updated code")
-            matched_sql = pd.DataFrame()
-        
-        if not matched_sql.empty:
-            st.subheader("💻 Matching SQL Queries")
-            st.write(f"Found {len(matched_sql)} matches")
-            
-            for _, sql_row in matched_sql.iterrows():
-                query = safe_get(sql_row, 'queryname')
-                score = safe_get(sql_row, 'final_score')
-                confidence = safe_get(sql_row, 'confidence')
-                tables = safe_get(sql_row, 'tables')
-                match_details = safe_get(sql_row, 'match_details')
-                
-                conf_class = f"confidence-{confidence.lower()}"
-                
-                col1, col2 = st.columns([5, 1])
-                
-                with col1:
-                    st.markdown(f'''
-                    <div class="interactive-card">
-                        <div class="card-title">{query}</div>
-                        <div class="card-subtitle">Tables: {tables}</div>
-                        <div style="margin-top: 0.5rem;">
-                            <span class="{conf_class}">{confidence} ({score}%)</span>
-                        </div>
-                        <div style="margin-top: 0.5rem; font-size: 0.85rem; color: #666;">
-                            {match_details}
-                        </div>
-                    </div>
-                    ''', unsafe_allow_html=True)
-                
-                with col2:
-                    if st.button("SQL →", key=f"sql_{query}"):
-                        navigate_to_sql_detail(query)
-        else:
-            st.info("No matching SQL queries found.")
-    else:
-        st.info("Generate mapping to see matched queries.")
-
-def render_sql_detail():
-    """Render SQL detail view with business and technical explanations"""
-    query_name = st.session_state.selected_sql
-    interface = st.session_state.selected_interface
-    
-    col1, col2 = st.columns([6, 1])
-    with col1:
-        st.markdown(f'<div class="breadcrumb">🏠 → ... → 📋 {interface} → 💻 {query_name}</div>', unsafe_allow_html=True)
-    with col2:
-        if st.button("← Back"):
-            navigate_to_interface(interface)
-    
-    st.markdown(f'<h1 style="color: #667eea;">💻 {query_name}</h1>', unsafe_allow_html=True)
-    
-    # IMPORTANT: Get file info from MAPPING (not SQL metadata)
-    # The mapping shows which specific file matched this interface
-    mapping_df = st.session_state.mapping_df
-    matched_file = None
-    matched_system = None
-    
-    if mapping_df is not None and not mapping_df.empty:
-        # Find the mapping row for this interface + query combination
-        mapping_match = mapping_df[
-            (mapping_df['integration'] == interface) & 
-            (mapping_df['queryname'] == query_name)
-        ]
-        
-        if not mapping_match.empty:
-            matched_file = safe_get(mapping_match.iloc[0], 'sql_file')
-            matched_system = safe_get(mapping_match.iloc[0], 'sql_system')
-    
-    # Get SQL details for the query code
-    sql_df = st.session_state.sql_df
-    if sql_df is None or sql_df.empty:
-        st.error("⚠️ SQL metadata not available")
-        return
-    
-    sql_matches = sql_df[sql_df['queryname'] == query_name]
-    if sql_matches.empty:
-        st.error(f"⚠️ Query '{query_name}' not found")
-        return
-    
-    sql_row = sql_matches.iloc[0]
-    
-    # Get interface details for context
-    int_df = st.session_state.interface_df
-    int_row = int_df[int_df['integration'] == interface].iloc[0] if interface in int_df['integration'].values else None
-    
-    # Extract data
-    raw_sql = safe_get(sql_row, 'rawsql', 'SQL code not available')
-    tables_str = safe_get(sql_row, 'tables', '')
-    
-    # Use matched file from mapping if available, otherwise fall back to SQL metadata
-    display_file = matched_file if matched_file else safe_get(sql_row, 'file')
-    display_system = matched_system if matched_system else safe_get(sql_row, 'system')
-    
-    # Parse tables
-    if tables_str:
-        tables_list = [t.strip() for t in str(tables_str).split(',')]
-    else:
-        tables_list = []
-    
-    # Analyze SQL
-    analysis = analyze_sql_query(raw_sql)
-    if not analysis['tables'] and tables_list:
-        analysis['tables'] = tables_list
-    
-    # Tabs for different views
-    tab1, tab2, tab3, tab4 = st.tabs(["💻 SQL Code", "📊 Analysis", "🤖 Business Insights", "⚙️ Technical Details"])
+    # Tabs
+    tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Entity Detail", "🔎 Field Search"])
     
     with tab1:
-        st.subheader("SQL Query Code")
-        st.code(raw_sql, language="sql")
+        st.subheader("Entity Relationship Diagram")
+        
+        with st.expander("ℹ️ How to use", expanded=False):
+            st.markdown("""
+            - **Hover** over nodes to see entity details
+            - **Larger nodes** = more fields
+            - **Connected nodes** = related entities
+            - **Click** entity name in list below to view details
+            """)
+        
+        # Generate ERD
+        erd_fig = create_entity_relationship_diagram(entity_matrix_df, entity_models)
+        if erd_fig:
+            st.plotly_chart(erd_fig, use_container_width=True)
         
         st.markdown("---")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write(f"**System:** {display_system}")
-            st.write(f"**File:** {display_file}")
-            if matched_file:
-                st.success("✅ Showing file from mapping match")
-        with col2:
-            st.write(f"**Query Name:** {query_name}")
-            st.write(f"**Complexity:** {analysis['complexity']}")
+        
+        # Entity list
+        st.subheader(f"📋 All Entities ({len(entity_models)})")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        for idx, (entity_name, entity_df) in enumerate(sorted(entity_models.items())):
+            with [col1, col2, col3][idx % 3]:
+                with st.container():
+                    st.markdown(f"""
+                    <div style="background: white; padding: 1rem; border-radius: 10px; 
+                                border-left: 4px solid #9C27B0; margin: 0.5rem 0;
+                                box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                        <h4 style="margin: 0; color: #9C27B0;">{entity_name}</h4>
+                        <p style="margin: 0.5rem 0 0 0; color: #666;">
+                            {len(entity_df)} fields
+                        </p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    if st.button(f"View Details →", key=f"view_{entity_name}"):
+                        return entity_name  # Return selected entity
     
     with tab2:
-        st.subheader("Query Analysis")
+        st.subheader("🔍 Entity Details")
         
-        col1, col2, col3, col4 = st.columns(4)
+        # Entity selector
+        entity_list = sorted(entity_models.keys())
         
-        with col1:
-            st.metric("Tables", len(analysis['tables']))
-        with col2:
-            st.metric("Joins", len(analysis['joins']))
-        with col3:
-            st.metric("Subqueries", "Yes" if analysis['has_subquery'] else "No")
-        with col4:
-            st.metric("Complexity", analysis['complexity'])
+        if selected_entity and selected_entity in entity_list:
+            default_idx = entity_list.index(selected_entity)
+        else:
+            default_idx = 0
         
-        st.markdown("---")
+        selected = st.selectbox(
+            "Select Entity:",
+            entity_list,
+            index=default_idx,
+            key="entity_selector"
+        )
         
-        if analysis['tables']:
-            st.subheader("📊 Tables Used")
-            for i, table in enumerate(analysis['tables'], 1):
-                st.markdown(f'<span class="column-badge">{i}. {table}</span>', unsafe_allow_html=True)
-        
-        if analysis['has_group_by']:
-            st.info("ℹ️ This query includes aggregation (GROUP BY)")
-        
-        if analysis['has_subquery']:
-            st.info("ℹ️ This query uses subqueries for complex filtering")
-        
-        if len(analysis['joins']) > 3:
-            st.warning(f"⚠️ This query has {len(analysis['joins'])} joins - ensure proper indexing")
+        if selected:
+            entity_df = entity_models[selected]
+            
+            st.markdown(f"### 📊 {selected}")
+            st.write(f"**Total Fields:** {len(entity_df)}")
+            
+            # Field lineage diagram
+            st.markdown("#### 🔄 Field Lineage Visualization")
+            lineage_fig = create_field_lineage_diagram(selected, entity_df)
+            if lineage_fig:
+                st.plotly_chart(lineage_fig, use_container_width=True)
+            
+            st.markdown("---")
+            
+            # Field mapping table
+            st.markdown("#### 📋 Complete Field Mapping")
+            
+            # Display the dataframe
+            st.dataframe(
+                entity_df,
+                use_container_width=True,
+                height=400
+            )
+            
+            # Export option
+            col1, col2 = st.columns([1, 3])
+            with col1:
+                csv = entity_df.to_csv(index=False)
+                st.download_button(
+                    "📥 Export CSV",
+                    csv,
+                    f"{selected}_fields.csv",
+                    "text/csv"
+                )
     
     with tab3:
-        st.subheader("🤖 Business Explanation")
+        st.subheader("🔎 Field Search")
         
-        st.markdown('<div class="ai-insight">', unsafe_allow_html=True)
+        st.write("Search across all entities for specific fields")
         
-        if int_row is not None:
-            business_exp = generate_business_explanation_rules(int_row, sql_row, analysis['tables'])
-        else:
-            # Fallback if no interface context
-            business_exp = f"""**Business Purpose:**
-
-This query ({query_name}) retrieves data from {len(analysis['tables'])} table(s) in the {safe_get(sql_row, 'system', 'system')}.
-
-**Data Scope:**
-
-The query accesses: {', '.join(analysis['tables'][:5])}
-
-**Complexity:** {analysis['complexity']} - """
-            if analysis['complexity'] == 'High':
-                business_exp += "This is a comprehensive data extraction that combines multiple data sources."
-            elif analysis['complexity'] == 'Medium':
-                business_exp += "This retrieves related data from multiple tables."
-            else:
-                business_exp += "This is a straightforward data extraction."
+        search_term = st.text_input("Search for field name:", "")
         
-        st.markdown(business_exp)
-        st.markdown('</div>', unsafe_allow_html=True)
+        search_type = st.radio(
+            "Search in:",
+            ["Source Fields", "DW Columns", "Descriptions", "All"],
+            horizontal=True
+        )
         
-        st.info("💡 These insights are generated using rule-based analysis (no GPU required)")
-    
-    with tab4:
-        st.subheader("⚙️ Technical Explanation")
-        
-        st.markdown('<div class="ai-insight" style="background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%); border-left-color: #2196f3;">', unsafe_allow_html=True)
-        
-        technical_exp = generate_technical_explanation_rules(sql_row, analysis['tables'], analysis)
-        st.markdown(technical_exp)
-        
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Additional technical details
-        st.markdown("---")
-        st.subheader("📋 Query Metadata")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write(f"**System:** {display_system}")
-            st.write(f"**File Path:** {display_file}")
-            if matched_file:
-                st.info("ℹ️ File shown from interface-SQL mapping match")
-            st.write(f"**Query Name:** {query_name}")
-        
-        with col2:
-            st.write(f"**Tables Accessed:** {len(analysis['tables'])}")
-            st.write(f"**Join Operations:** {len(analysis['joins'])}")
-            st.write(f"**Complexity Level:** {analysis['complexity']}")
-        
-        if analysis['has_subquery']:
-            st.write("**Contains Subqueries:** Yes")
-        if analysis['has_group_by']:
-            st.write("**Aggregation:** Yes (GROUP BY)")
-        if analysis['has_union']:
-            st.write("**Union Operations:** Yes")
-        
-        st.info("💡 Technical analysis uses lightweight pattern matching (CPU-optimized)")
-
-
-
-def main():
-    st.sidebar.title("🌐 Data Explorer 360°")
-    st.sidebar.markdown("### Enhanced Semantic Matching")
-    st.sidebar.markdown("---")
-    
-    # Upload section
-    with st.sidebar.expander("📂 Upload Data", expanded=st.session_state.interface_df is None):
-        interface_file = st.file_uploader("Interface Inventory", type=["xlsx", "xls"])
-        
-        if interface_file:
-            with st.spinner("Loading interface data..."):
-                st.session_state.interface_df = load_interface_inventory(interface_file)
+        if search_term:
+            results = []
             
-            if st.session_state.interface_df is not None:
-                st.success(f"✅ Loaded {len(st.session_state.interface_df)} interfaces")
-        
-        sql_file = st.file_uploader("SQL Metadata", type=["xlsx", "xls"])
-        
-        if sql_file:
-            with st.spinner("Loading SQL data..."):
-                st.session_state.sql_df = load_sql_metadata(sql_file)
-            
-            if st.session_state.sql_df is not None:
-                st.success(f"✅ Loaded {len(st.session_state.sql_df)} queries")
-        
-        # Load existing mapping
-        if os.path.exists(MAPPING_FILE) and st.session_state.mapping_df is None:
-            try:
-                st.session_state.mapping_df = pd.read_excel(MAPPING_FILE)
-                st.info(f"📄 Loaded existing mapping ({len(st.session_state.mapping_df)} records)")
-            except:
-                pass
-        
-        if st.session_state.interface_df is not None and st.session_state.sql_df is not None:
-            st.markdown("### 🎯 Matching Settings")
-            
-            use_semantic = st.checkbox(
-                "Enable Semantic Matching",
-                value=True if embedding_model else False,
-                disabled=not embedding_model,
-                help="Uses AI to find similar interfaces and SQL queries"
-            )
-            
-            min_score = st.slider(
-                "Minimum Confidence Score",
-                30, 100, 45, 5,
-                help="Lower = more matches but less confident"
-            )
-            
-            if st.button("🔗 Generate Mapping", use_container_width=True):
-                with st.spinner("Generating enhanced semantic mapping..."):
-                    st.session_state.mapping_df = generate_enhanced_mapping(
-                        st.session_state.interface_df,
-                        st.session_state.sql_df,
-                        min_score=min_score,
-                        use_semantic=use_semantic
-                    )
+            for entity_name, entity_df in entity_models.items():
+                # Search based on type
+                matches = pd.DataFrame()
+                
+                for col in entity_df.columns:
+                    col_lower = col.lower()
+                    search_lower = search_term.lower()
                     
-                    if not st.session_state.mapping_df.empty:
-                        try:
-                            st.session_state.mapping_df.to_excel(MAPPING_FILE, index=False)
-                            st.success(f"✅ Generated {len(st.session_state.mapping_df)} mappings")
-                            st.info(f"📄 Saved to: {os.path.abspath(MAPPING_FILE)}")
-                        except Exception as e:
-                            st.success(f"✅ Generated {len(st.session_state.mapping_df)} mappings")
-                            st.warning(f"⚠️ Could not save: {e}")
-                    else:
-                        st.warning("⚠️ No mappings found. Try lowering minimum score.")
-                st.rerun()
+                    if search_type == "All" or \
+                       (search_type == "Source Fields" and 'source' in col_lower) or \
+                       (search_type == "DW Columns" and any(x in col_lower for x in ['dw', 'warehouse', 'target'])) or \
+                       (search_type == "Descriptions" and 'desc' in col_lower):
+                        
+                        mask = entity_df[col].astype(str).str.contains(search_lower, case=False, na=False)
+                        if mask.any():
+                            temp = entity_df[mask].copy()
+                            temp['Entity'] = entity_name
+                            results.append(temp)
+            
+            if results:
+                combined = pd.concat(results, ignore_index=True)
+                st.success(f"✅ Found {len(combined)} matches across {len(results)} entities")
+                
+                st.dataframe(combined, use_container_width=True, height=400)
+            else:
+                st.info(f"No matches found for '{search_term}'")
     
-    # GLOBAL FILTERS
-    if st.session_state.interface_df is not None:
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("🔍 Global Filters")
-        
-        df = st.session_state.interface_df
-        
-        if 'source_system' in df.columns:
-            sources = sorted(df['source_system'].dropna().unique())
-            st.session_state.filter_source_systems = st.sidebar.multiselect(
-                "Source System",
-                options=sources,
-                default=st.session_state.filter_source_systems
-            )
-        
-        if 'target_system' in df.columns:
-            targets = sorted(df['target_system'].dropna().unique())
-            st.session_state.filter_target_systems = st.sidebar.multiselect(
-                "Target System",
-                options=targets,
-                default=st.session_state.filter_target_systems
-            )
-        
-        if 'type' in df.columns:
-            types = sorted(df['type'].dropna().unique())
-            st.session_state.filter_types = st.sidebar.multiselect(
-                "Type",
-                options=types,
-                default=st.session_state.filter_types
-            )
-        
-        if 'application' in df.columns:
-            apps = sorted(df['application'].dropna().unique())
-            st.session_state.filter_applications = st.sidebar.multiselect(
-                "Application",
-                options=apps,
-                default=st.session_state.filter_applications
-            )
-        
-        if get_active_filter_count() > 0:
-            if st.sidebar.button("🗑️ Clear All Filters", use_container_width=True):
-                clear_all_filters()
-                st.rerun()
-    
-    # Navigation
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("📍 Current Location")
-    
-    level = st.session_state.navigation_level
-    
-    if level == 'overview':
-        st.sidebar.write("🏠 360° Overview")
-    elif level == 'system_pair':
-        st.sidebar.write(f"🔗 {st.session_state.selected_source} → {st.session_state.selected_target}")
-    elif level == 'interface_detail':
-        st.sidebar.write(f"📋 {st.session_state.selected_interface}")
-    
-    if level != 'overview':
-        if st.sidebar.button("🏠 Return to Overview", use_container_width=True):
-            navigate_to_overview()
-    
-    # Main content
-    if st.session_state.interface_df is None:
-        st.markdown('<div class="premium-header"><h1 class="premium-title">🌐 Welcome to Data Explorer 360°</h1><p class="premium-subtitle">Enhanced Semantic Matching Edition</p></div>', unsafe_allow_html=True)
-        
-        st.info("👈 Upload your Interface Inventory and SQL Metadata in the sidebar")
-        
-        st.markdown("""
-        ### ✨ Enhanced Matching Features
-        
-        This version uses **intelligent semantic matching** to find relationships between:
-        
-        **Interface Side:** Application, Integration, Description, Source System, Type, Target System
-        
-        **SQL Side:** System, File, QueryName, Tables
-        
-        **Matching Strategy:**
-        - 🎯 **Deterministic (80%)**: Exact matches on applications, integrations, descriptions
-        - 🤖 **Semantic (50%)**: AI-powered similarity on descriptions and context
-        
-        **Result:** More accurate matches with confidence scores!
-        
-        ### 💻 CPU-Optimized
-        
-        - ✅ Lightweight embedding model (500MB RAM)
-        - ✅ Rule-based explanations (no GPU needed)
-        - ✅ Fast pattern-based SQL analysis
-        - ✅ Works great on standard laptops!
-        """)
-    else:
-        if level == 'overview':
-            render_overview()
-        elif level == 'system_pair':
-            render_system_pair()
-        elif level == 'interface_detail':
-            render_interface_detail()
-        elif level == 'sql_detail':
-            render_sql_detail()
+    return None
+
+# ========================================================
+# STANDALONE MODE
+# ========================================================
 
 if __name__ == "__main__":
-    main()
-
+    st.set_page_config(
+        page_title="Entity Model Explorer",
+        page_icon="📚",
+        layout="wide"
+    )
+    
+    st.title("📚 Entity Model Explorer - Standalone")
+    
+    # File uploader
+    uploaded_file = st.file_uploader(
+        "Upload Entity Model Reference Excel",
+        type=['xlsx', 'xls'],
+        help="Excel file with Entity Matrix sheet and individual entity sheets"
+    )
+    
+    if uploaded_file:
+        # Load entity models
+        entity_matrix, entity_models = load_entity_model_reference(uploaded_file)
+        
+        if entity_matrix is not None and entity_models:
+            # Render explorer
+            selected = render_entity_explorer(entity_matrix, entity_models)
+            
+            # Handle entity selection (for standalone mode, just re-render)
+            if selected:
+                st.rerun()
+    else:
+        st.info("👆 Upload your Entity Model Reference Excel file to get started")
+        
+        with st.expander("📋 Expected File Format", expanded=True):
+            st.markdown("""
+            **Sheet 1: "Entity Matrix"**
+            - List of all entities/tables
+            - Optional: relationships between entities
+            
+            **Other Sheets: Individual Entity Models**
+            - Sheet name = Entity name (e.g., "Account", "Transaction")
+            - Columns should include:
+              - Source field names
+              - Field descriptions
+              - Data warehouse column names
+              
+            **Example:**
+            ```
+            Sheet: Account
+            | Source Field    | Field Description          | DW Column Name |
+            |-----------------|----------------------------|----------------|
+            | ACCOUNT_NUMBER  | Unique account identifier  | ACCOUNT_NUMBER |
+            | CUSTOMER_NAME   | Customer full name         | CUSTOMER_NAME  |
+            ```
+            """)
