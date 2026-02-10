@@ -1039,23 +1039,27 @@ def main():
     with tab1:
         st.subheader("Entity Model Explorer")
         
-        if st.session_state.entity_models:
-            # Simple entity selector that WORKS
+        if st.session_state.entity_models and st.session_state.entity_matrix_df is not None:
+            # Use full entity explorer with ERD
+            ee.render_entity_explorer(
+                st.session_state.entity_matrix_df,
+                st.session_state.entity_models
+            )
+        elif st.session_state.entity_models:
+            # Fallback if no matrix
+            st.info("Entity models loaded. Upload complete Entity Model Reference for full features.")
             entity_list = sorted(st.session_state.entity_models.keys())
             
             selected = st.selectbox(
                 "Select Entity:",
                 ["-- Choose Entity --"] + entity_list,
-                key="entity_select_main"
+                key="entity_select_fallback"
             )
             
             if selected and selected != "-- Choose Entity --":
                 entity_df = st.session_state.entity_models[selected]
-                
                 st.markdown(f"### {selected}")
                 st.write(f"**Fields:** {len(entity_df)}")
-                
-                # Show entity data
                 st.dataframe(entity_df, use_container_width=True, height=400)
                 
                 # Export
@@ -1064,7 +1068,8 @@ def main():
                     "📥 Export CSV",
                     csv,
                     f"{selected}_fields.csv",
-                    "text/csv"
+                    "text/csv",
+                    key="entity_export_fallback"
                 )
         else:
             st.info("👈 Upload Entity Model Reference in sidebar")
