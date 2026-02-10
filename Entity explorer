@@ -143,6 +143,366 @@ def load_entity_model_reference(file):
 def create_entity_relationship_diagram(entity_matrix_df, entity_models):
     """
     Create ERD using Entity Matrix sheet for relationship mapping
+    Entity Matrix columns should match entity sheet names
+    """
+    
+    if not PLOTLY_AVAILABLE:
+        st.warning("⚠️ Plotly not available. Install: pip install plotly networkx")
+        return None
+    
+    try:
+        # Get all entities
+        entities = list(entity_models.keys()) if entity_models else []
+        
+        if not entities:
+            return None
+        
+        # Entity info (field counts)
+        entity_info = {}
+        for entity_name, entity_df in entity_models.items():
+            entity_info[entity_name] = {
+                'field_count': len(entity_df)
+            }
+        
+        # Build relationships from Entity Matrix
+        relationships = []
+        
+        if entity_matrix_df is not None and len(entity_matrix_df) > 0:
+            st.info(f"🔍 Analyzing Entity Matrix: {len(entity_matrix_df)} rows, {len(entity_matrix_df.columns)} columns")
+            
+            # Get column names from Entity Matrix (already cleaned by loader)
+            matrix_columns = entity_matrix_df.columns.tolist()
+            
+            # Match matrix columns with entity sheet names
+            # Both have been cleaned by clean_column_name(), so direct comparison should work
+            entity_columns = []
+            column_to_entity_map = {}
+            
+            for col in matrix_columns:
+                # Check if this cleaned column matches any cleaned entity name
+                for entity_name in entities:
+                    # Clean both for comparison
+                    if col == clean_column_name(entity_name):
+                        entity_columns.append(col)
+                        column_to_entity_map[col] = entity_name
+                        break
+            
+            # DEBUG: Show what we found
+            st.success(f"✅ Matched {len(entity_columns)} entity columns from {len(matrix_columns)} total columns")
+            with st.expander("🔍 DEBUG: Column Matching", expanded=True):
+                st.write("**Entity Matrix columns:**", matrix_columns[:15])
+                st.write("**Entity sheet names:**", entities[:15])
+                st.write("**Matched columns:**", entity_columns)
+                st.write("**Column to Entity mapping:**", column_to_entity_map)
+                
+                # Show sample data
+                if len(entity_matrix_df) > 0:
+                    st.write("**Sample row from Entity Matrix:**")
+                    st.dataframe(entity_matrix_df.head(3))
+            
+            if not entity_columns:
+                st.error("❌ No entity columns matched!")
+                st.write("Matrix column names need to match entity sheet names (after cleaning)")
+                st.write("**Tip:** Rename Entity Matrix columns to match entity sheet names exactly")
+                return None
+            
+            # Build relationships from Entity Matrix
+            row_relationships = 0
+            for idx, row in entity_matrix_df.iterrows():
+                # Find which entities have values in this row
+                entities_in_row = []
+                relationship_keys = {}
+                
+                for col in entity_columns:
+                    cell_value = safe_get(row, col, '')
+                    # Check if cell has a value (not empty, not "No matching Columns")
+                    if cell_value and \
+                       str(cell_value).strip() and \
+                       str(cell_value).strip().upper() not in ['NO MATCHING COLUMNS', 'N/A', 'NA', 'NONE']:
+                        entity_name = column_to_entity_map[col]
+                        entities_in_row.append(entity_name)
+                        relationship_keys[entity_name] = str(cell_value).strip()
+                
+                # Connect all entities that appear in this row (minimum 2 entities)
+                if len(entities_in_row) >= 2:
+                    row_relationships += 1
+                    
+                    # DEBUG: Show first few rows
+                    if row_relationships <= 5:
+                        with st.expander(f"Row {idx}: Connecting {len(entities_in_row)} entities", expanded=False):
+                            st.write(f"**Entities:** {entities_in_row}")
+                            st.write(f"**Keys:** {relationship_keys}")
+                    
+                    for i, entity1 in enumerate(entities_in_row):
+                        for entity2 in entities_in_row[i+1:]:
+                            # Check if relationship already exists
+                            existing_rel = None
+                            for rel in relationships:
+                                if (rel['from_entity'] == entity1 and rel['to_entity'] == entity2) or \
+                                   (rel['from_entity'] == entity2 and rel['to_entity'] == entity1):
+                                    existing_rel = rel
+                                    break
+                            
+                            if existing_rel:
+                                # Add to existing relationship's keys
+                                key1 = relationship_keys.get(entity1, '')
+                                key2 = relationship_keys.get(entity2, '')
+                                if key1 and key1 not in existing_rel['keys']:
+                                    existing_rel['keys'].append(key1)
+                                if key2 and key2 not in existing_rel['keys']:
+                                    existing_rel['keys'].append(key2)
+                            else:
+                                # Create new relationship
+                                key1 = relationship_keys.get(entity1, '')
+                                key2 = relationship_keys.get(entity2, '')
+                                keys = list(set([k for k in [key1, key2] if k]))
+                                
+                                # Determine relationship type based on keys
+                                is_master_account = any('MASTER' in k.upper() and 'ACCOUNT' in k.upper() for k in keys)
+                                is_account = any('ACCOUNT' in k.upper() and 'NUMBER' in k.upper() and 'MASTER' not in k.upper() for k in keys)
+                                
+                                if is_master_account:
+                                    rel_type = 'MASTER_ACCOUNT_NUMBER'
+                                    color = '#E74C3C'  # Red
+                                    width = 3
+                                elif is_account:
+                                    rel_type = 'ACCOUNT_NUMBER'
+                                    color = '#3498DB'  # Blue
+                                    width = 3
+                                else:
+                                    rel_type = 'Related'
+                                    color = '#95A5A6'  # Gray
+                                    width = 2
+                                
+                                relationships.append({
+                                    'from_entity': entity1,
+                                    'to_entity': entity2,
+                                    'type': rel_type,
+                                    'keys': keys,
+                                    'color': color,
+                                    'width': width
+                                })
+            
+            # Show final relationship count
+            st.success(f"✅ Built {len(relationships)} relationships from {row_relationships} Entity Matrix rows")
+            with st.expander("🔍 All Relationships Found", expanded=False):
+                for rel in relationships:
+                    st.write(f"**{rel['from_entity']} ↔ {rel['to_entity']}** ({rel['type']})")
+        
+        # If no relationships from matrix, fall back to field-based detection
+        if not relationships:
+            st.warning("⚠️ No relationships found in Entity Matrix. Using field-based fallback...")
+            
+            # Field-based detection code here
+            for entity_name, entity_df in entity_models.items():
+                source_col = None
+                for col in entity_df.columns:
+                    if 'source' in col.lower() and 'field' in col.lower():
+                        source_col = col
+                        break
+                
+                if source_col:
+                    field_names = [str(f).upper().strip() for f in entity_df[source_col].dropna().astype(str).tolist()]
+                    entity_info[entity_name]['has_account_number'] = any('ACCOUNT' in f and 'NUMBER' in f and 'MASTER' not in f for f in field_names)
+                    entity_info[entity_name]['has_master_account'] = any('MASTER' in f and 'ACCOUNT' in f for f in field_names)
+            
+            for i, entity1 in enumerate(entities):
+                for entity2 in entities[i+1:]:
+                    info1 = entity_info.get(entity1, {})
+                    info2 = entity_info.get(entity2, {})
+                    
+                    if info1.get('has_account_number') and info2.get('has_account_number'):
+                        relationships.append({
+                            'from_entity': entity1,
+                            'to_entity': entity2,
+                            'type': 'ACCOUNT_NUMBER',
+                            'keys': ['ACCOUNT_NUMBER'],
+                            'color': '#3498DB',
+                            'width': 3
+                        })
+                    
+                    if info1.get('has_master_account') and info2.get('has_master_account'):
+                        already_related = any(
+                            (r['from_entity'] == entity1 and r['to_entity'] == entity2) or
+                            (r['from_entity'] == entity2 and r['to_entity'] == entity1)
+                            for r in relationships
+                        )
+                        if not already_related:
+                            relationships.append({
+                                'from_entity': entity1,
+                                'to_entity': entity2,
+                                'type': 'MASTER_ACCOUNT_NUMBER',
+                                'keys': ['MASTER_ACCOUNT_NUMBER'],
+                                'color': '#E74C3C',
+                                'width': 3
+                            })
+            
+            st.info(f"Built {len(relationships)} relationships using field-based detection")
+        
+        # Rest of the visualization code...
+        import math
+        n_entities = len(entities)
+        entity_positions = {}
+        radius = max(4, n_entities * 0.6)
+        
+        for i, entity_name in enumerate(entities):
+            angle = 2 * math.pi * i / n_entities
+            x = radius * math.cos(angle)
+            y = radius * math.sin(angle)
+            entity_positions[entity_name] = (x, y)
+        
+        fig = go.Figure()
+        
+        # Draw relationship lines
+        for rel in relationships:
+            from_entity = rel['from_entity']
+            to_entity = rel['to_entity']
+            
+            if from_entity in entity_positions and to_entity in entity_positions:
+                x1, y1 = entity_positions[from_entity]
+                x2, y2 = entity_positions[to_entity]
+                
+                hover_text = f"<b>{rel['type']}</b><br>"
+                hover_text += f"{from_entity} ↔ {to_entity}<br>"
+                if rel['keys']:
+                    hover_text += f"Keys: {', '.join(rel['keys'][:3])}"
+                
+                fig.add_trace(go.Scatter(
+                    x=[x1, x2],
+                    y=[y1, y2],
+                    mode='lines',
+                    line=dict(color=rel['color'], width=rel['width']),
+                    hoverinfo='text',
+                    hovertext=hover_text,
+                    showlegend=False
+                ))
+        
+        # Draw entity rectangles
+        for entity_name, (x_center, y_center) in entity_positions.items():
+            info = entity_info.get(entity_name, {})
+            field_count = info.get('field_count', 0)
+            
+            rel_count = sum(1 for r in relationships if r['from_entity'] == entity_name or r['to_entity'] == entity_name)
+            
+            if rel_count > 5:
+                header_color = '#8E44AD'
+                entity_icon = '🔗'
+            elif rel_count > 2:
+                header_color = '#3498DB'
+                entity_icon = '🔵'
+            elif rel_count > 0:
+                header_color = '#27AE60'
+                entity_icon = '🟢'
+            else:
+                header_color = '#95A5A6'
+                entity_icon = '⚪'
+            
+            rect_width = 2.0
+            rect_height = 1.0
+            
+            x0 = x_center - rect_width / 2
+            x1 = x_center + rect_width / 2
+            y0 = y_center - rect_height / 2
+            y1 = y_center + rect_height / 2
+            
+            fig.add_shape(
+                type="rect",
+                x0=x0, y0=y0, x1=x1, y1=y1,
+                line=dict(color="#2C3E50", width=3),
+                fillcolor="#ECF0F1",
+                layer='below'
+            )
+            
+            fig.add_shape(
+                type="rect",
+                x0=x0, y0=y_center, x1=x1, y1=y1,
+                line=dict(color="#2C3E50", width=0),
+                fillcolor=header_color,
+                layer='below'
+            )
+            
+            fig.add_shape(
+                type="line",
+                x0=x0, y0=y_center, x1=x1, y1=y_center,
+                line=dict(color="#2C3E50", width=2)
+            )
+            
+            fig.add_trace(go.Scatter(
+                x=[x_center],
+                y=[y_center + rect_height / 4],
+                mode='text',
+                text=[f"<b>{entity_name}</b>"],
+                textfont=dict(size=11, color='white', family='Arial Black'),
+                hoverinfo='skip',
+                showlegend=False
+            ))
+            
+            field_info = f"{entity_icon} {field_count} fields"
+            
+            hover_info = f"<b>{entity_name}</b><br>"
+            hover_info += f"Fields: {field_count}<br>"
+            hover_info += f"Relationships: {rel_count}"
+            
+            fig.add_trace(go.Scatter(
+                x=[x_center],
+                y=[y_center - rect_height / 4],
+                mode='text',
+                text=[field_info],
+                textfont=dict(size=9, color='#2C3E50'),
+                hoverinfo='text',
+                hovertext=hover_info,
+                showlegend=False
+            ))
+        
+        # Legend
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None],
+            mode='lines',
+            line=dict(color='#3498DB', width=3),
+            name='ACCOUNT_NUMBER'
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None],
+            mode='lines',
+            line=dict(color='#E74C3C', width=3),
+            name='MASTER_ACCOUNT_NUMBER'
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None],
+            mode='lines',
+            line=dict(color='#95A5A6', width=2),
+            name='Other'
+        ))
+        
+        fig.update_layout(
+            title=dict(
+                text="📊 Entity Relationship Diagram<br><sub>From Entity Matrix sheet</sub>",
+                x=0.5,
+                xanchor='center',
+                font=dict(size=16, color='#2C3E50', family='Arial')
+            ),
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-radius-2, radius+2]),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-radius-2, radius+2]),
+            height=700,
+            plot_bgcolor='#FFFFFF',
+            paper_bgcolor='#F8F9FA',
+            hovermode='closest',
+            margin=dict(l=40, r=40, t=120, b=80),
+            showlegend=True,
+            legend=dict(x=0.5, y=-0.1, xanchor='center', yanchor='top', orientation='h', bgcolor='rgba(255,255,255,0.9)', bordercolor='#2C3E50', borderwidth=1)
+        )
+        
+        return fig
+        
+    except Exception as e:
+        st.error(f"Error creating ERD: {e}")
+        import traceback
+        st.error(traceback.format_exc())
+        return None
+    """
+    Create ERD using Entity Matrix sheet for relationship mapping
     Entity Matrix shows which entities are related through specific columns
     """
     
