@@ -142,9 +142,287 @@ def load_entity_model_reference(file):
 
 def create_entity_relationship_diagram(entity_matrix_df, entity_models):
     """
-    Create clean hierarchical ERD with proper arrows and organization
-    Professional layout like standard database diagrams
+    Create clean, scrollable ERD with organized layout and clear arrows
     """
+    
+    if not PLOTLY_AVAILABLE:
+        st.warning("⚠️ Plotly not available. Install: pip install plotly networkx")
+        return None
+    
+    try:
+        entities = list(entity_models.keys()) if entity_models else []
+        if not entities:
+            return None
+        
+        # Entity info
+        entity_info = {}
+        for entity_name, entity_df in entity_models.items():
+            entity_info[entity_name] = {'field_count': len(entity_df)}
+        
+        # Build relationships from Entity Matrix
+        relationships = []
+        
+        if entity_matrix_df is not None and len(entity_matrix_df) > 0:
+            matrix_columns = entity_matrix_df.columns.tolist()
+            entity_columns = []
+            column_to_entity_map = {}
+            
+            for col in matrix_columns:
+                for entity_name in entities:
+                    if col == clean_column_name(entity_name):
+                        entity_columns.append(col)
+                        column_to_entity_map[col] = entity_name
+                        break
+            
+            for idx, row in entity_matrix_df.iterrows():
+                entities_in_row = []
+                relationship_keys = {}
+                
+                for col in entity_columns:
+                    cell_value = safe_get(row, col, '')
+                    if cell_value and str(cell_value).strip() and \
+                       str(cell_value).strip().upper() not in ['NO MATCHING COLUMNS', 'N/A', 'NA', 'NONE']:
+                        entity_name = column_to_entity_map[col]
+                        entities_in_row.append(entity_name)
+                        relationship_keys[entity_name] = str(cell_value).strip()
+                
+                if len(entities_in_row) >= 2:
+                    for i, entity1 in enumerate(entities_in_row):
+                        for entity2 in entities_in_row[i+1:]:
+                            existing_rel = None
+                            for rel in relationships:
+                                if (rel['from_entity'] == entity1 and rel['to_entity'] == entity2) or \
+                                   (rel['from_entity'] == entity2 and rel['to_entity'] == entity1):
+                                    existing_rel = rel
+                                    break
+                            
+                            if not existing_rel:
+                                key1 = relationship_keys.get(entity1, '')
+                                key2 = relationship_keys.get(entity2, '')
+                                keys = list(set([k for k in [key1, key2] if k]))
+                                
+                                is_master = any('MASTER' in k.upper() and 'ACCOUNT' in k.upper() for k in keys)
+                                is_account = any('ACCOUNT' in k.upper() and 'NUMBER' in k.upper() and 'MASTER' not in k.upper() for k in keys)
+                                
+                                relationships.append({
+                                    'from_entity': entity1,
+                                    'to_entity': entity2,
+                                    'keys': keys,
+                                    'is_master': is_master,
+                                    'is_account': is_account
+                                })
+        
+        # Fallback if no relationships
+        if not relationships:
+            for entity_name, entity_df in entity_models.items():
+                source_col = None
+                for col in entity_df.columns:
+                    if 'source' in col.lower() and 'field' in col.lower():
+                        source_col = col
+                        break
+                
+                if source_col:
+                    field_names = [str(f).upper().strip() for f in entity_df[source_col].dropna().astype(str).tolist()]
+                    entity_info[entity_name]['has_account'] = any('ACCOUNT' in f and 'NUMBER' in f and 'MASTER' not in f for f in field_names)
+            
+            for i, entity1 in enumerate(entities):
+                for entity2 in entities[i+1:]:
+                    if entity_info.get(entity1, {}).get('has_account') and entity_info.get(entity2, {}).get('has_account'):
+                        relationships.append({
+                            'from_entity': entity1,
+                            'to_entity': entity2,
+                            'keys': ['ACCOUNT_NUMBER'],
+                            'is_master': False,
+                            'is_account': True
+                        })
+        
+        # CLEAN GRID LAYOUT - organized in rows with proper spacing
+        import math
+        
+        # Calculate connection count
+        rel_count = {entity: 0 for entity in entities}
+        for rel in relationships:
+            rel_count[rel['from_entity']] += 1
+            rel_count[rel['to_entity']] += 1
+        
+        # Sort by connection count (most connected first)
+        sorted_entities = sorted(entities, key=lambda e: rel_count[e], reverse=True)
+        
+        # Create clean grid layout with extra spacing
+        n_entities = len(sorted_entities)
+        n_cols = 4  # Fixed 4 columns for consistency
+        n_rows = math.ceil(n_entities / n_cols)
+        
+        # Much larger spacing to avoid overlap
+        x_spacing = 8  # Increased from 4.5
+        y_spacing = 5  # Increased from 3.5
+        
+        entity_positions = {}
+        for idx, entity in enumerate(sorted_entities):
+            row = idx // n_cols
+            col = idx % n_cols
+            
+            x = col * x_spacing + 3
+            y = (n_rows - row - 1) * y_spacing + 3  # Top to bottom
+            
+            entity_positions[entity] = (x, y)
+        
+        # Create figure with larger canvas
+        fig = go.Figure()
+        
+        # Draw relationship arrows UNDER boxes (curved to avoid overlap)
+        drawn_pairs = set()
+        
+        for rel in relationships:
+            from_entity = rel['from_entity']
+            to_entity = rel['to_entity']
+            
+            if from_entity in entity_positions and to_entity in entity_positions:
+                x1, y1 = entity_positions[from_entity]
+                x2, y2 = entity_positions[to_entity]
+                
+                # Create unique pair key
+                pair = tuple(sorted([from_entity, to_entity]))
+                if pair in drawn_pairs:
+                    continue
+                drawn_pairs.add(pair)
+                
+                # Determine color and width
+                if rel['is_master']:
+                    color = '#E74C3C'
+                    width = 2.5
+                elif rel['is_account']:
+                    color = '#3498DB'
+                    width = 2.5
+                else:
+                    color = '#BDC3C7'
+                    width = 1.5
+                
+                # Draw curved arrow
+                fig.add_annotation(
+                    x=x2, y=y2,
+                    ax=x1, ay=y1,
+                    xref='x', yref='y',
+                    axref='x', ayref='y',
+                    showarrow=True,
+                    arrowhead=2,
+                    arrowsize=1.2,
+                    arrowwidth=width,
+                    arrowcolor=color,
+                    opacity=0.7,
+                    hovertext=f"{from_entity} ↔ {to_entity}<br>{', '.join(rel['keys'][:2])}",
+                )
+        
+        # Draw entity boxes (larger and cleaner)
+        for entity_name, (x_center, y_center) in entity_positions.items():
+            field_count = entity_info[entity_name]['field_count']
+            connections = rel_count[entity_name]
+            
+            # Color coding
+            if connections >= 6:
+                color = '#8E44AD'  # Purple
+            elif connections >= 4:
+                color = '#3498DB'  # Blue
+            elif connections >= 2:
+                color = '#27AE60'  # Green
+            elif connections >= 1:
+                color = '#F39C12'  # Orange
+            else:
+                color = '#95A5A6'  # Gray
+            
+            # Larger boxes with rounded corners effect
+            w, h = 3.0, 1.5
+            x0, x1 = x_center - w/2, x_center + w/2
+            y0, y1 = y_center - h/2, y_center + h/2
+            
+            # Shadow effect (slightly offset)
+            fig.add_shape(type="rect", x0=x0+0.1, y0=y0-0.1, x1=x1+0.1, y1=y1-0.1,
+                         fillcolor='rgba(0,0,0,0.1)', line_width=0, layer='below')
+            
+            # Main box
+            fig.add_shape(type="rect", x0=x0, y0=y0, x1=x1, y1=y1,
+                         line=dict(color="#2C3E50", width=2),
+                         fillcolor="#FFFFFF", layer='below')
+            
+            # Header
+            fig.add_shape(type="rect", x0=x0, y0=y_center+0.1, x1=x1, y1=y1,
+                         fillcolor=color, line_width=0, layer='below')
+            
+            # Divider
+            fig.add_shape(type="line", x0=x0, y0=y_center+0.1, x1=x1, y1=y_center+0.1,
+                         line=dict(color="#2C3E50", width=2))
+            
+            # Entity name (larger, bold)
+            fig.add_trace(go.Scatter(
+                x=[x_center], y=[y_center + h/3],
+                mode='text',
+                text=[f"<b>{entity_name}</b>"],
+                textfont=dict(size=14, color='white', family='Arial Black'),
+                hoverinfo='skip',
+                showlegend=False
+            ))
+            
+            # Info text
+            info_text = f"{field_count} fields"
+            if connections > 0:
+                info_text += f" • {connections} links"
+            
+            fig.add_trace(go.Scatter(
+                x=[x_center], y=[y_center - h/3],
+                mode='text',
+                text=[info_text],
+                textfont=dict(size=11, color='#34495E'),
+                hoverinfo='text',
+                hovertext=f"<b>{entity_name}</b><br>Fields: {field_count}<br>Connections: {connections}",
+                showlegend=False
+            ))
+        
+        # Calculate canvas size
+        canvas_width = n_cols * x_spacing + 6
+        canvas_height = n_rows * y_spacing + 6
+        
+        # Ultra-clean layout with scroll/zoom
+        fig.update_layout(
+            title=dict(
+                text="<b>Entity Relationship Diagram</b>",
+                x=0.5, xanchor='center',
+                font=dict(size=24, color='#2C3E50', family='Arial Black')
+            ),
+            xaxis=dict(
+                showgrid=False, 
+                zeroline=False, 
+                showticklabels=False, 
+                range=[-1, canvas_width]
+            ),
+            yaxis=dict(
+                showgrid=False, 
+                zeroline=False, 
+                showticklabels=False, 
+                range=[-1, canvas_height],
+                scaleanchor="x",
+                scaleratio=1
+            ),
+            height=800,  # Larger height
+            plot_bgcolor='#F8F9FA',
+            paper_bgcolor='#FFFFFF',
+            hovermode='closest',
+            margin=dict(l=10, r=10, t=80, b=10),
+            showlegend=False,
+            # Enable drag and zoom
+            dragmode='pan',
+        )
+        
+        # Add zoom/pan configuration
+        fig.update_xaxes(fixedrange=False)
+        fig.update_yaxes(fixedrange=False)
+        
+        return fig
+        
+    except Exception as e:
+        st.error(f"Error creating ERD: {e}")
+        import traceback
+        st.error(traceback.format_exc())
+        return None
     
     if not PLOTLY_AVAILABLE:
         st.warning("⚠️ Plotly not available. Install: pip install plotly networkx")
