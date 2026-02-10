@@ -200,6 +200,361 @@ def load_sei_mapping(file):
 
 def match_sei_to_addvantage(sei_df, addv_df, entity_models=None, min_score=60, use_semantic=True):
     """
+    Match SEI fields to AddVantage fields using multilingual-e5-large
+    Optimized for 8GB NVIDIA GPU (Blackwell architecture)
+    """
+    
+    st.info("🔄 Starting SEI → AddVantage matching...")
+    
+    # Initialize semantic model for GPU if enabled
+    model = None
+    sei_emb_name = None
+    sei_emb_desc = None
+    addv_emb = None
+    
+    if use_semantic:
+        try:
+            import torch
+            from sentence_transformers import SentenceTransformer
+            
+            st.info("🚀 Initializing multilingual-e5-large on NVIDIA GPU...")
+            
+            # Check GPU availability
+            if torch.cuda.is_available():
+                gpu_name = torch.cuda.get_device_name(0)
+                gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                st.success(f"✅ GPU Detected: {gpu_name} ({gpu_memory:.1f} GB)")
+            else:
+                st.warning("⚠️ No GPU detected, falling back to CPU")
+            
+            # Load multilingual-e5-large optimized for GPU
+            model = SentenceTransformer(
+                'intfloat/multilingual-e5-large',
+                device='cuda' if torch.cuda.is_available() else 'cpu'
+            )
+            
+            # Enable GPU optimizations for Blackwell
+            if torch.cuda.is_available():
+                # Use mixed precision for 8GB VRAM optimization
+                model.half()  # FP16 for faster inference and lower memory
+                
+                # Enable CUDA optimizations
+                torch.backends.cudnn.benchmark = True
+                torch.backends.cuda.matmul.allow_tf32 = True
+                
+                st.success("✅ Model loaded with FP16 precision for 8GB GPU optimization")
+            else:
+                st.info("ℹ️ Running on CPU (slower)")
+            
+            # SEI: Create embeddings for field names
+            st.info("📊 Creating SEI field name embeddings...")
+            sei_texts_name = []
+            for _, sei_row in sei_df.iterrows():
+                field_name = safe_get(sei_row, 'field_name', '')
+                # E5 models require "query: " prefix for better performance
+                sei_texts_name.append(f"query: {field_name}")
+            
+            # Encode with GPU acceleration (batch processing for efficiency)
+            with torch.cuda.amp.autocast():  # Automatic mixed precision
+                sei_emb_name = model.encode(
+                    sei_texts_name,
+                    batch_size=64,  # Larger batch for GPU
+                    show_progress_bar=True,
+                    convert_to_numpy=True,
+                    normalize_embeddings=True  # L2 normalization for better similarity
+                )
+            
+            st.success(f"✅ SEI field name embeddings created: {sei_emb_name.shape}")
+            
+            # SEI: Create embeddings for field names + descriptions
+            st.info("📊 Creating SEI enhanced embeddings (name + description)...")
+            sei_texts_desc = []
+            for _, sei_row in sei_df.iterrows():
+                field_name = safe_get(sei_row, 'field_name', '')
+                field_desc = safe_get(sei_row, 'field_description', '')
+                combined = f"query: {field_name} {field_desc}".strip()
+                sei_texts_desc.append(combined)
+            
+            with torch.cuda.amp.autocast():
+                sei_emb_desc = model.encode(
+                    sei_texts_desc,
+                    batch_size=64,
+                    show_progress_bar=True,
+                    convert_to_numpy=True,
+                    normalize_embeddings=True
+                )
+            
+            st.success(f"✅ SEI enhanced embeddings created: {sei_emb_desc.shape}")
+            
+            # AddVantage: Build enhanced embeddings using entity descriptions
+            st.info("📊 Enhancing AddVantage fields with entity model descriptions...")
+            addv_texts_enhanced = []
+            addv_field_to_entity_desc = {}
+            enhanced_count = 0
+            
+            for _, addv_row in addv_df.iterrows():
+                addv_field = safe_get(addv_row, 'field_name', '')
+                
+                # Try to find entity description for this field
+                entity_desc = ''
+                if entity_models:
+                    for entity_name, entity_df in entity_models.items():
+                        source_col = None
+                        desc_col = None
+                        
+                        for col in entity_df.columns:
+                            col_lower = col.lower()
+                            if not source_col and 'source' in col_lower and 'field' in col_lower:
+                                source_col = col
+                            if not desc_col and col_lower == 'field_description':
+                                desc_col = col
+                        
+                        if source_col and desc_col:
+                            # EXACT MATCH ONLY to avoid wrong descriptions
+                            for _, entity_row in entity_df.iterrows():
+                                entity_field = safe_get(entity_row, source_col, '')
+                                if entity_field and normalize_text(entity_field) == normalize_text(addv_field):
+                                    entity_desc = safe_get(entity_row, desc_col, '')
+                                    if entity_desc:
+                                        addv_field_to_entity_desc[addv_field] = {
+                                            'description': entity_desc,
+                                            'entity': entity_name
+                                        }
+                                        enhanced_count += 1
+                                        break
+                        
+                        if entity_desc:
+                            break
+                
+                # E5 models use "passage: " prefix for documents
+                if entity_desc:
+                    combined = f"passage: {addv_field} {entity_desc}".strip()
+                else:
+                    combined = f"passage: {addv_field}"
+                
+                addv_texts_enhanced.append(combined)
+            
+            if enhanced_count > 0:
+                st.success(f"✅ Enhanced {enhanced_count} AddVantage fields with entity descriptions")
+                with st.expander("📋 Sample enhanced fields", expanded=False):
+                    for field, info in list(addv_field_to_entity_desc.items())[:5]:
+                        st.write(f"**{field}** (from {info['entity']}): {info['description'][:100]}...")
+            else:
+                st.warning("⚠️ No 'Field Description' column found in entity models")
+            
+            # Encode AddVantage embeddings with GPU
+            st.info("📊 Creating AddVantage embeddings...")
+            with torch.cuda.amp.autocast():
+                addv_emb = model.encode(
+                    addv_texts_enhanced,
+                    batch_size=64,
+                    show_progress_bar=True,
+                    convert_to_numpy=True,
+                    normalize_embeddings=True
+                )
+            
+            st.success(f"✅ AddVantage embeddings created: {addv_emb.shape}")
+            
+            # Clear GPU cache to free memory
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            st.success("✅ All embeddings ready (multilingual-e5-large on GPU)")
+            
+        except Exception as e:
+            st.warning(f"⚠️ GPU embedding failed: {e}")
+            st.info("Falling back to CPU...")
+            sei_emb_name = None
+            sei_emb_desc = None
+            use_semantic = False
+    
+    # Match each SEI field
+    results = []
+    progress = st.progress(0)
+    status = st.empty()
+    
+    total = len(sei_df)
+    matched = 0
+    
+    for idx, (_, sei_row) in enumerate(sei_df.iterrows()):
+        if idx % 50 == 0:
+            progress.progress((idx + 1) / total)
+            status.text(f"Processing {idx + 1}/{total}... ({matched} matched)")
+        
+        sei_field = safe_get(sei_row, 'field_name', '')
+        sei_desc = safe_get(sei_row, 'field_description', '')
+        sei_norm = normalize_text(sei_field)
+        
+        best_idx = None
+        best_score = 0
+        best_match_type = ""
+        
+        # Find best match in AddVantage
+        for aidx, (_, addv_row) in enumerate(addv_df.iterrows()):
+            addv_field = safe_get(addv_row, 'field_name', '')
+            addv_norm = normalize_text(addv_field)
+            
+            score = 0
+            match_type = ""
+            
+            # 1. Exact field name match (HIGHEST PRIORITY - unbeatable)
+            if sei_norm == addv_norm:
+                score = 100
+                match_type = "Exact name"
+            
+            # 2. Partial field name match (STRICTER - suffix only)
+            elif not score and (addv_norm.endswith(sei_norm) or sei_norm.endswith(addv_norm)):
+                if len(sei_norm) >= 3 and len(addv_norm) >= 3:
+                    score = 75
+                    match_type = "Partial name (suffix)"
+            
+            # 3. Semantic match using field name only (multilingual-e5-large)
+            if not score and use_semantic and sei_emb_name is not None:
+                try:
+                    # Cosine similarity (already normalized, so just dot product)
+                    sim_name = np.dot(sei_emb_name[idx], addv_emb[aidx])
+                    
+                    # E5 models produce better similarities, adjust thresholds
+                    if sim_name >= 0.80:  # E5 threshold (was 0.85)
+                        score = max(score, 90)
+                        match_type = "Semantic name (high)"
+                    elif sim_name >= 0.70:  # E5 threshold (was 0.75)
+                        score = max(score, 75)
+                        match_type = "Semantic name (med)"
+                    elif sim_name >= 0.60:  # E5 threshold (was 0.65)
+                        score = max(score, 65)
+                        match_type = "Semantic name (low)"
+                except:
+                    pass
+            
+            # 4. Enhanced semantic match using field name + description (E5)
+            if score < 100 and use_semantic and sei_emb_desc is not None and sei_desc:
+                try:
+                    sim_desc = np.dot(sei_emb_desc[idx], addv_emb[aidx])
+                    
+                    # E5 optimized thresholds
+                    if sim_desc >= 0.75:  # E5 threshold (was 0.80)
+                        boost_score = 95
+                        if boost_score > score:
+                            score = boost_score
+                            match_type = "Semantic desc (high)"
+                    elif sim_desc >= 0.65:  # E5 threshold (was 0.70)
+                        boost_score = 85
+                        if boost_score > score:
+                            score = boost_score
+                            match_type = "Semantic desc (med)"
+                    elif sim_desc >= 0.55:  # E5 threshold (was 0.60)
+                        boost_score = 70
+                        if boost_score > score:
+                            score = boost_score
+                            match_type = "Semantic desc (low)"
+                except:
+                    pass
+            
+            # Track best match
+            if score > best_score:
+                best_score = score
+                best_idx = aidx
+                best_match_type = match_type
+        
+        # Build result - KEEP ALL
+        row = sei_row.to_dict()
+        
+        if best_idx is not None and best_score >= min_score:
+            matched += 1
+            addv_match = addv_df.iloc[best_idx]
+            addv_field_name = safe_get(addv_match, 'field_name')
+            
+            # Get AddVantage field description from entity model (EXACT MATCH ONLY)
+            addv_field_desc = ''
+            matched_entity_name = ''
+            if entity_models and addv_field_name:
+                for entity_name, entity_df in entity_models.items():
+                    source_col = None
+                    desc_col = None
+                    
+                    for col in entity_df.columns:
+                        col_lower = col.lower()
+                        if not source_col and 'source' in col_lower and 'field' in col_lower:
+                            source_col = col
+                        if not desc_col and col_lower == 'field_description':
+                            desc_col = col
+                    
+                    if source_col and desc_col:
+                        for _, entity_row in entity_df.iterrows():
+                            entity_field = safe_get(entity_row, source_col, '')
+                            # EXACT MATCH ONLY
+                            if entity_field and normalize_text(entity_field) == normalize_text(addv_field_name):
+                                addv_field_desc = safe_get(entity_row, desc_col, '')
+                                matched_entity_name = entity_name
+                                if addv_field_desc:
+                                    break
+                    
+                    if addv_field_desc:
+                        break
+            
+            row['matched_addv_field'] = addv_field_name
+            row['matched_addv_description'] = addv_field_desc
+            row['matched_addv_file'] = safe_get(addv_match, 'file_clean')
+            row['matched_addv_type'] = safe_get(addv_match, 'data_type')
+            row['matched_addv_length'] = safe_get(addv_match, 'max_length')
+            row['match_score'] = best_score
+            row['match_type'] = best_match_type
+            row['match_confidence'] = 'High' if best_score >= 85 else 'Medium' if best_score >= 70 else 'Low'
+        else:
+            # Unmatched
+            row['matched_addv_field'] = ''
+            row['matched_addv_description'] = ''
+            row['matched_addv_file'] = ''
+            row['matched_addv_type'] = ''
+            row['matched_addv_length'] = ''
+            row['match_score'] = 0
+            row['match_type'] = 'No match'
+            row['match_confidence'] = 'Unmatched'
+        
+        results.append(row)
+    
+    progress.empty()
+    status.empty()
+    
+    result_df = pd.DataFrame(results)
+    
+    unmatched = total - matched
+    
+    # Show GPU stats if available
+    gpu_info = ""
+    if use_semantic:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                gpu_memory_used = torch.cuda.max_memory_allocated(0) / 1024**3
+                gpu_info = f"\n🎮 GPU Memory Used: {gpu_memory_used:.2f} GB"
+        except:
+            pass
+    
+    st.success(f"""
+    ✅ **SEI → AddVantage Matching Complete!**
+    
+    🚀 Model: multilingual-e5-large (GPU-accelerated)
+    📊 Total SEI Fields: {total}
+    ✅ Matched: {matched} ({matched/total*100:.1f}%)
+    ❌ Unmatched: {unmatched} ({unmatched/total*100:.1f}%)
+    {gpu_info}
+    
+    ⚠️ All {total} fields kept in results (matched + unmatched)
+    """)
+    
+    # Clear GPU memory
+    if use_semantic:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except:
+            pass
+    
+    return result_df
+    """
     Match SEI fields to AddVantage fields
     
     Enhanced matching using:
@@ -212,13 +567,34 @@ def match_sei_to_addvantage(sei_df, addv_df, entity_models=None, min_score=60, u
     
     st.info("🔄 Matching SEI → AddVantage...")
     
-    # Load model if needed
+    # Load multilingual-e5-large model if needed
     model = None
     if use_semantic and ML_AVAILABLE:
         try:
-            st.write("Loading AI model...")
-            model = SentenceTransformer("all-MiniLM-L6-v2")
-            st.success("✅ Model loaded")
+            import torch
+            from sentence_transformers import SentenceTransformer
+            
+            st.write("🚀 Loading multilingual-e5-large on NVIDIA GPU...")
+            
+            # Check GPU
+            if torch.cuda.is_available():
+                gpu_name = torch.cuda.get_device_name(0)
+                gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                st.success(f"✅ GPU: {gpu_name} ({gpu_memory:.1f} GB)")
+            
+            # Load E5 model optimized for GPU
+            model = SentenceTransformer(
+                'intfloat/multilingual-e5-large',
+                device='cuda' if torch.cuda.is_available() else 'cpu'
+            )
+            
+            # GPU optimizations for 8GB VRAM
+            if torch.cuda.is_available():
+                model.half()  # FP16 precision
+                torch.backends.cudnn.benchmark = True
+                torch.backends.cuda.matmul.allow_tf32 = True
+                st.success("✅ Model loaded with FP16 optimization")
+            
         except Exception as e:
             st.warning(f"⚠️ Model load failed: {e}")
     
@@ -232,11 +608,21 @@ def match_sei_to_addvantage(sei_df, addv_df, entity_models=None, min_score=60, u
     entity_emb = None
     
     if use_semantic and model:
-        st.write("Computing embeddings with descriptions...")
+        st.write("Computing embeddings with E5 model...")
         try:
-            # SEI: field name embeddings
-            sei_texts_name = sei_df['field_name'].tolist()
-            sei_emb_name = model.encode(sei_texts_name, batch_size=32, show_progress_bar=False, convert_to_numpy=True)
+            import torch
+            
+            # SEI: field name embeddings (with E5 query prefix)
+            sei_texts_name = [f"query: {name}" for name in sei_df['field_name'].tolist()]
+            
+            with torch.cuda.amp.autocast() if torch.cuda.is_available() else torch.no_grad():
+                sei_emb_name = model.encode(
+                    sei_texts_name,
+                    batch_size=64,
+                    show_progress_bar=True,
+                    convert_to_numpy=True,
+                    normalize_embeddings=True
+                )
             
             # SEI: field description embeddings (if available)
             if 'field_description' in sei_df.columns:
@@ -244,11 +630,19 @@ def match_sei_to_addvantage(sei_df, addv_df, entity_models=None, min_score=60, u
                 for _, row in sei_df.iterrows():
                     field_name = safe_get(row, 'field_name', '')
                     field_desc = safe_get(row, 'field_description', '')
-                    # Combine for richer context
-                    combined = f"{field_name} {field_desc}".strip()
+                    # E5 query prefix with combined context
+                    combined = f"query: {field_name} {field_desc}".strip()
                     sei_texts_desc.append(combined)
                 
-                sei_emb_desc = model.encode(sei_texts_desc, batch_size=32, show_progress_bar=False, convert_to_numpy=True)
+                with torch.cuda.amp.autocast() if torch.cuda.is_available() else torch.no_grad():
+                    sei_emb_desc = model.encode(
+                        sei_texts_desc,
+                        batch_size=64,
+                        show_progress_bar=True,
+                        convert_to_numpy=True,
+                        normalize_embeddings=True
+                    )
+                
                 st.success("✅ SEI descriptions included in matching")
             
             # AddVantage: Build enhanced embeddings using entity descriptions
@@ -294,16 +688,23 @@ def match_sei_to_addvantage(sei_df, addv_df, entity_models=None, min_score=60, u
                         if entity_desc:
                             break
                 
-                # Combine AddVantage field name with entity description (if found)
+                # E5 passage prefix for documents
                 if entity_desc:
-                    combined = f"{addv_field} {entity_desc}".strip()
+                    combined = f"passage: {addv_field} {entity_desc}".strip()
                 else:
-                    combined = addv_field
+                    combined = f"passage: {addv_field}"
                 
                 addv_texts_enhanced.append(combined)
             
-            # Encode enhanced AddVantage embeddings
-            addv_emb = model.encode(addv_texts_enhanced, batch_size=32, show_progress_bar=False, convert_to_numpy=True)
+            # Encode enhanced AddVantage embeddings with GPU
+            with torch.cuda.amp.autocast() if torch.cuda.is_available() else torch.no_grad():
+                addv_emb = model.encode(
+                    addv_texts_enhanced,
+                    batch_size=64,
+                    show_progress_bar=True,
+                    convert_to_numpy=True,
+                    normalize_embeddings=True
+                )
             
             if addv_field_to_entity_desc:
                 st.success(f"✅ Enhanced {len(addv_field_to_entity_desc)} AddVantage fields with 'Field Description' from entity models")
@@ -336,7 +737,8 @@ def match_sei_to_addvantage(sei_df, addv_df, entity_models=None, min_score=60, u
                             field_name = safe_get(row, source_col, '')
                             field_desc = safe_get(row, desc_col, '')
                             if field_name or field_desc:
-                                combined = f"{field_name} {field_desc}".strip()
+                                # E5 passage prefix
+                                combined = f"passage: {field_name} {field_desc}".strip()
                                 entity_field_texts.append(combined)
                                 entity_field_index.append({
                                     'entity': entity_name,
@@ -345,10 +747,22 @@ def match_sei_to_addvantage(sei_df, addv_df, entity_models=None, min_score=60, u
                                 })
                 
                 if entity_field_texts:
-                    entity_emb = model.encode(entity_field_texts, batch_size=32, show_progress_bar=False, convert_to_numpy=True)
+                    with torch.cuda.amp.autocast() if torch.cuda.is_available() else torch.no_grad():
+                        entity_emb = model.encode(
+                            entity_field_texts,
+                            batch_size=64,
+                            show_progress_bar=True,
+                            convert_to_numpy=True,
+                            normalize_embeddings=True
+                        )
                     st.success(f"✅ Entity descriptions loaded ({len(entity_field_texts)} fields)")
             
-            st.success("✅ All embeddings ready")
+            st.success("✅ All embeddings ready (multilingual-e5-large)")
+            
+            # Clear GPU cache
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                
         except Exception as e:
             st.warning(f"⚠️ Embedding failed: {e}")
             sei_emb_name = None
@@ -398,40 +812,41 @@ def match_sei_to_addvantage(sei_df, addv_df, entity_models=None, min_score=60, u
                     score = 75
                     match_type = "Partial name (suffix)"
             
-            # 3. Semantic match using field name only
+            # 3. Semantic match using field name only (E5-optimized thresholds)
             if not score and use_semantic and sei_emb_name is not None:
                 try:
                     sim_name = np.dot(sei_emb_name[idx], addv_emb[aidx])
-                    if sim_name >= 0.85:
+                    # E5 produces better similarities - adjusted thresholds
+                    if sim_name >= 0.80:  # Was 0.85
                         score = max(score, 90)
                         match_type = "Semantic name (high)"
-                    elif sim_name >= 0.75:
+                    elif sim_name >= 0.70:  # Was 0.75
                         score = max(score, 75)
                         match_type = "Semantic name (med)"
-                    elif sim_name >= 0.65:
+                    elif sim_name >= 0.60:  # Was 0.65
                         score = max(score, 65)
                         match_type = "Semantic name (low)"
                 except:
                     pass
             
-            # 4. Enhanced semantic match using field name + description
+            # 4. Enhanced semantic match using field name + description (E5-optimized)
             # BUT: Never override exact name matches (score 100)
             if score < 100 and use_semantic and sei_emb_desc is not None and sei_desc:
                 try:
                     sim_desc = np.dot(sei_emb_desc[idx], addv_emb[aidx])
                     
-                    # Description-based matching can boost confidence (but not override exact)
-                    if sim_desc >= 0.80:
+                    # E5-optimized thresholds for description matching
+                    if sim_desc >= 0.75:  # Was 0.80
                         boost_score = 95
                         if boost_score > score:
                             score = boost_score
                             match_type = "Semantic desc (high)"
-                    elif sim_desc >= 0.70:
+                    elif sim_desc >= 0.65:  # Was 0.70
                         boost_score = 85
                         if boost_score > score:
                             score = boost_score
                             match_type = "Semantic desc (med)"
-                    elif sim_desc >= 0.60:
+                    elif sim_desc >= 0.55:  # Was 0.60
                         boost_score = 70
                         if boost_score > score:
                             score = boost_score
