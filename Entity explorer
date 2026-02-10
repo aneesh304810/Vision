@@ -142,8 +142,8 @@ def load_entity_model_reference(file):
 
 def create_entity_relationship_diagram(entity_matrix_df, entity_models):
     """
-    Create interactive ERD from entity matrix
-    Shows entities as nodes, relationships as edges
+    Create traditional database-style ERD with entities as rectangles/tables
+    Shows entities with field counts in classic ERD format
     """
     
     if not PLOTLY_AVAILABLE:
@@ -151,121 +151,195 @@ def create_entity_relationship_diagram(entity_matrix_df, entity_models):
         return None
     
     try:
-        G = nx.Graph()
+        # Get all entities
+        entities = list(entity_models.keys()) if entity_models else []
         
-        # Method 1: Parse entity matrix for relationships
-        entities = set()
-        edges = []
-        
-        # Try to find entity columns in matrix
-        entity_cols = [col for col in entity_matrix_df.columns if any(x in col for x in ['entity', 'table', 'name'])]
-        
-        if len(entity_cols) >= 2:
-            # Found relationship columns
-            for _, row in entity_matrix_df.iterrows():
-                entity1 = safe_get(row, entity_cols[0])
-                entity2 = safe_get(row, entity_cols[1]) if len(entity_cols) > 1 else None
-                
-                if entity1:
-                    entities.add(entity1)
-                if entity2 and entity2 != entity1:
-                    entities.add(entity2)
-                    edges.append((entity1, entity2))
-        
-        # Method 2: Use entity model sheet names
         if not entities:
-            entities = set(entity_models.keys())
+            return None
         
-        # Add all entities as nodes
-        for entity in entities:
-            field_count = len(entity_models.get(entity, pd.DataFrame()))
-            G.add_node(entity, fields=field_count)
+        # Count fields per entity
+        entity_field_counts = {}
+        for entity_name, entity_df in entity_models.items():
+            entity_field_counts[entity_name] = len(entity_df)
         
-        # Add edges
-        for e1, e2 in edges:
-            if e1 in G.nodes() and e2 in G.nodes():
-                G.add_edge(e1, e2)
+        # Find relationships (entities that share field names)
+        relationships = []
+        for i, entity1 in enumerate(entities):
+            for entity2 in entities[i+1:]:
+                if entity1 in entity_models and entity2 in entity_models:
+                    df1 = entity_models[entity1]
+                    df2 = entity_models[entity2]
+                    
+                    # Find source field columns
+                    source_col1 = None
+                    source_col2 = None
+                    
+                    for col in df1.columns:
+                        if 'source' in col.lower() and 'field' in col.lower():
+                            source_col1 = col
+                            break
+                    
+                    for col in df2.columns:
+                        if 'source' in col.lower() and 'field' in col.lower():
+                            source_col2 = col
+                            break
+                    
+                    if source_col1 and source_col2:
+                        fields1 = set(df1[source_col1].dropna().astype(str).str.lower())
+                        fields2 = set(df2[source_col2].dropna().astype(str).str.lower())
+                        
+                        common_fields = fields1 & fields2
+                        if len(common_fields) > 0:
+                            relationships.append({
+                                'entity1': entity1,
+                                'entity2': entity2,
+                                'common_fields': len(common_fields),
+                                'field_names': list(common_fields)[:3]  # First 3 for tooltip
+                            })
         
-        # Layout
-        pos = nx.spring_layout(G, k=3, iterations=50)
+        # Layout entities in a grid
+        import math
+        n_entities = len(entities)
+        n_cols = min(4, math.ceil(math.sqrt(n_entities)))  # Max 4 columns
+        n_rows = math.ceil(n_entities / n_cols)
         
-        # Create edge traces
-        edge_x = []
-        edge_y = []
+        # Entity positions (center of each rectangle)
+        entity_positions = {}
+        entity_idx = 0
+        for row in range(n_rows):
+            for col in range(n_cols):
+                if entity_idx < n_entities:
+                    entity_name = entities[entity_idx]
+                    x = col * 3.5
+                    y = (n_rows - 1 - row) * 3  # Top to bottom
+                    entity_positions[entity_name] = (x, y)
+                    entity_idx += 1
         
-        for edge in G.edges():
-            x0, y0 = pos[edge[0]]
-            x1, y1 = pos[edge[1]]
-            edge_x.extend([x0, x1, None])
-            edge_y.extend([y0, y1, None])
+        fig = go.Figure()
         
-        edge_trace = go.Scatter(
-            x=edge_x,
-            y=edge_y,
-            line=dict(width=2, color='#888'),
-            hoverinfo='none',
-            mode='lines'
-        )
+        # Draw relationship lines first (behind rectangles)
+        for rel in relationships:
+            if rel['entity1'] in entity_positions and rel['entity2'] in entity_positions:
+                x1, y1 = entity_positions[rel['entity1']]
+                x2, y2 = entity_positions[rel['entity2']]
+                
+                # Line width based on number of common fields
+                line_width = min(1 + rel['common_fields'] / 5, 4)
+                
+                # Create hover text with field names
+                hover_text = f"{rel['common_fields']} shared fields"
+                if rel['field_names']:
+                    hover_text += f"<br>e.g., {', '.join(rel['field_names'][:3])}"
+                
+                fig.add_trace(go.Scatter(
+                    x=[x1, x2],
+                    y=[y1, y2],
+                    mode='lines',
+                    line=dict(color='#BDC3C7', width=line_width),
+                    hoverinfo='text',
+                    hovertext=hover_text,
+                    showlegend=False
+                ))
         
-        # Create node traces
-        node_x = []
-        node_y = []
-        node_text = []
-        node_size = []
-        node_hover = []
-        
-        for node in G.nodes():
-            x, y = pos[node]
-            node_x.append(x)
-            node_y.append(y)
-            node_text.append(node)
+        # Draw entity rectangles (traditional database table style)
+        for entity_name in entities:
+            if entity_name not in entity_positions:
+                continue
+                
+            x_center, y_center = entity_positions[entity_name]
+            field_count = entity_field_counts.get(entity_name, 0)
             
-            field_count = G.nodes[node].get('fields', 0)
-            node_size.append(max(40, field_count * 2))
+            # Rectangle dimensions
+            rect_width = 1.8
+            rect_height = 0.9
             
-            hover_text = f"<b>{node}</b><br>"
-            hover_text += f"Fields: {field_count}<br>"
-            hover_text += f"Connections: {len(list(G.neighbors(node)))}"
-            node_hover.append(hover_text)
+            # Coordinates
+            x0 = x_center - rect_width / 2
+            x1 = x_center + rect_width / 2
+            y0 = y_center - rect_height / 2
+            y1 = y_center + rect_height / 2
+            
+            # Add rectangle border
+            fig.add_shape(
+                type="rect",
+                x0=x0, y0=y0, x1=x1, y1=y1,
+                line=dict(color="#2C3E50", width=3),
+                fillcolor="#ECF0F1",
+                layer='below'
+            )
+            
+            # Add header rectangle (darker)
+            fig.add_shape(
+                type="rect",
+                x0=x0, y0=y_center, x1=x1, y1=y1,
+                line=dict(color="#2C3E50", width=0),
+                fillcolor="#3498DB",
+                layer='below'
+            )
+            
+            # Add horizontal divider
+            fig.add_shape(
+                type="line",
+                x0=x0, y0=y_center, x1=x1, y1=y_center,
+                line=dict(color="#2C3E50", width=2)
+            )
+            
+            # Add entity name (header - white text on blue)
+            fig.add_trace(go.Scatter(
+                x=[x_center],
+                y=[y_center + rect_height / 4],
+                mode='text',
+                text=[f"<b>{entity_name}</b>"],
+                textfont=dict(size=12, color='white', family='Arial Black'),
+                hoverinfo='skip',
+                showlegend=False
+            ))
+            
+            # Add field count (body - dark text on light gray)
+            fig.add_trace(go.Scatter(
+                x=[x_center],
+                y=[y_center - rect_height / 4],
+                mode='text',
+                text=[f"📋 {field_count} fields"],
+                textfont=dict(size=10, color='#2C3E50'),
+                hoverinfo='text',
+                hovertext=f"<b>{entity_name}</b><br>{field_count} fields<br>Click entity name below to view details",
+                showlegend=False
+            ))
         
-        node_trace = go.Scatter(
-            x=node_x,
-            y=node_y,
-            mode='markers+text',
-            hoverinfo='text',
-            text=node_text,
-            hovertext=node_hover,
-            textposition="top center",
-            marker=dict(
-                size=node_size,
-                color='#9C27B0',
-                line=dict(width=2, color='white')
-            ),
-            textfont=dict(size=10, color='black')
-        )
-        
-        # Create figure
-        fig = go.Figure(data=[edge_trace, node_trace])
-        
+        # Update layout for clean ERD look
         fig.update_layout(
-            title={
-                'text': "📊 Entity Relationship Diagram<br><sub>Node size = field count | Click entity name in list below to view details</sub>",
-                'x': 0.5,
-                'xanchor': 'center'
-            },
-            showlegend=False,
+            title=dict(
+                text="📊 Entity Relationship Diagram (Traditional ERD Style)",
+                x=0.5,
+                xanchor='center',
+                font=dict(size=16, color='#2C3E50', family='Arial')
+            ),
+            xaxis=dict(
+                showgrid=False, 
+                zeroline=False, 
+                showticklabels=False,
+                range=[-1, n_cols * 3.5]
+            ),
+            yaxis=dict(
+                showgrid=False, 
+                zeroline=False, 
+                showticklabels=False,
+                range=[-1, n_rows * 3 + 0.5]
+            ),
+            height=max(450, n_rows * 250),
+            plot_bgcolor='#FFFFFF',
+            paper_bgcolor='#F8F9FA',
             hovermode='closest',
-            margin=dict(b=20, l=5, r=5, t=80),
-            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            plot_bgcolor='#f8f9fa',
-            height=600
+            margin=dict(l=40, r=40, t=100, b=40)
         )
         
         return fig
         
     except Exception as e:
         st.error(f"Error creating ERD: {e}")
+        import traceback
+        st.error(traceback.format_exc())
         return None
 
 # ========================================================
