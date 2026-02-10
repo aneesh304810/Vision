@@ -142,8 +142,9 @@ def load_entity_model_reference(file):
 
 def create_entity_relationship_diagram(entity_matrix_df, entity_models):
     """
-    Create traditional database-style ERD with entities as rectangles/tables
-    Shows entities with field counts in classic ERD format
+    Create ERD based on shared key fields:
+    - Connect entities that share ACCOUNT_NUMBER
+    - Connect entities that share MASTER_ACCOUNT_NUMBER
     """
     
     if not PLOTLY_AVAILABLE:
@@ -157,50 +158,706 @@ def create_entity_relationship_diagram(entity_matrix_df, entity_models):
         if not entities:
             return None
         
-        # Count fields per entity
-        entity_field_counts = {}
-        for entity_name, entity_df in entity_models.items():
-            entity_field_counts[entity_name] = len(entity_df)
+        # Analyze each entity for key fields
+        entity_info = {}
         
-        # Find relationships (entities that share field names)
+        for entity_name, entity_df in entity_models.items():
+            # Find source field column
+            source_col = None
+            for col in entity_df.columns:
+                if 'source' in col.lower() and 'field' in col.lower():
+                    source_col = col
+                    break
+            
+            # Get all field names (uppercase for comparison)
+            field_names = []
+            if source_col:
+                field_names = [str(f).upper().strip() for f in entity_df[source_col].dropna().astype(str).tolist()]
+            
+            # Check for ACCOUNT_NUMBER (not MASTER_ACCOUNT_NUMBER)
+            has_account_number = any(
+                'ACCOUNT' in f and 'NUMBER' in f and 'MASTER' not in f 
+                for f in field_names
+            )
+            
+            # Check for MASTER_ACCOUNT_NUMBER
+            has_master_account_number = any(
+                'MASTER' in f and 'ACCOUNT' in f and 'NUMBER' in f 
+                for f in field_names
+            )
+            
+            entity_info[entity_name] = {
+                'field_count': len(entity_df),
+                'has_account_number': has_account_number,
+                'has_master_account_number': has_master_account_number
+            }
+        
+        # Build relationships based on shared fields
         relationships = []
+        
+        # Group entities by the keys they have
+        entities_with_account_number = [e for e, info in entity_info.items() if info['has_account_number']]
+        entities_with_master_account = [e for e, info in entity_info.items() if info['has_master_account_number']]
+        
+        # Connect all entities that have ACCOUNT_NUMBER
+        for i, entity1 in enumerate(entities_with_account_number):
+            for entity2 in entities_with_account_number[i+1:]:
+                relationships.append({
+                    'from_entity': entity1,
+                    'to_entity': entity2,
+                    'key': 'ACCOUNT_NUMBER',
+                    'color': '#3498DB',  # Blue
+                    'width': 3,
+                    'dash': 'solid'
+                })
+        
+        # Connect all entities that have MASTER_ACCOUNT_NUMBER
+        for i, entity1 in enumerate(entities_with_master_account):
+            for entity2 in entities_with_master_account[i+1:]:
+                # Check if not already connected
+                already_connected = any(
+                    (r['from_entity'] == entity1 and r['to_entity'] == entity2) or
+                    (r['from_entity'] == entity2 and r['to_entity'] == entity1)
+                    for r in relationships
+                )
+                
+                if not already_connected:
+                    relationships.append({
+                        'from_entity': entity1,
+                        'to_entity': entity2,
+                        'key': 'MASTER_ACCOUNT_NUMBER',
+                        'color': '#E74C3C',  # Red
+                        'width': 3,
+                        'dash': 'solid'
+                    })
+        
+        # Layout entities in a circular or grid pattern
+        import math
+        n_entities = len(entities)
+        
+        # Use circular layout for better relationship visualization
+        entity_positions = {}
+        radius = max(4, n_entities * 0.6)
+        
+        for i, entity_name in enumerate(entities):
+            angle = 2 * math.pi * i / n_entities
+            x = radius * math.cos(angle)
+            y = radius * math.sin(angle)
+            entity_positions[entity_name] = (x, y)
+        
+        fig = go.Figure()
+        
+        # Draw relationship lines
+        for rel in relationships:
+            from_entity = rel['from_entity']
+            to_entity = rel['to_entity']
+            
+            if from_entity in entity_positions and to_entity in entity_positions:
+                x1, y1 = entity_positions[from_entity]
+                x2, y2 = entity_positions[to_entity]
+                
+                # Hover text
+                hover_text = f"<b>Connected via {rel['key']}</b><br>"
+                hover_text += f"{from_entity} ↔ {to_entity}"
+                
+                # Draw line
+                fig.add_trace(go.Scatter(
+                    x=[x1, x2],
+                    y=[y1, y2],
+                    mode='lines',
+                    line=dict(color=rel['color'], width=rel['width'], dash=rel['dash']),
+                    hoverinfo='text',
+                    hovertext=hover_text,
+                    showlegend=False
+                ))
+        
+        # Draw entity rectangles
+        for entity_name, (x_center, y_center) in entity_positions.items():
+            info = entity_info[entity_name]
+            field_count = info['field_count']
+            
+            # Determine color based on which keys this entity has
+            if info['has_account_number'] and info['has_master_account_number']:
+                header_color = '#8E44AD'  # Purple (has both)
+                entity_icon = '🔗'
+            elif info['has_master_account_number']:
+                header_color = '#E74C3C'  # Red (master account number)
+                entity_icon = '🔴'
+            elif info['has_account_number']:
+                header_color = '#3498DB'  # Blue (account number)
+                entity_icon = '🔵'
+            else:
+                header_color = '#95A5A6'  # Gray (no key fields)
+                entity_icon = '⚪'
+            
+            # Rectangle dimensions
+            rect_width = 2.0
+            rect_height = 1.0
+            
+            # Coordinates
+            x0 = x_center - rect_width / 2
+            x1 = x_center + rect_width / 2
+            y0 = y_center - rect_height / 2
+            y1 = y_center + rect_height / 2
+            
+            # Border
+            fig.add_shape(
+                type="rect",
+                x0=x0, y0=y0, x1=x1, y1=y1,
+                line=dict(color="#2C3E50", width=3),
+                fillcolor="#ECF0F1",
+                layer='below'
+            )
+            
+            # Header
+            fig.add_shape(
+                type="rect",
+                x0=x0, y0=y_center, x1=x1, y1=y1,
+                line=dict(color="#2C3E50", width=0),
+                fillcolor=header_color,
+                layer='below'
+            )
+            
+            # Divider
+            fig.add_shape(
+                type="line",
+                x0=x0, y0=y_center, x1=x1, y1=y_center,
+                line=dict(color="#2C3E50", width=2)
+            )
+            
+            # Entity name
+            fig.add_trace(go.Scatter(
+                x=[x_center],
+                y=[y_center + rect_height / 4],
+                mode='text',
+                text=[f"<b>{entity_name}</b>"],
+                textfont=dict(size=11, color='white', family='Arial Black'),
+                hoverinfo='skip',
+                showlegend=False
+            ))
+            
+            # Field count with icon
+            field_info = f"{entity_icon} {field_count} fields"
+            
+            # Build hover info
+            hover_info = f"<b>{entity_name}</b><br>"
+            hover_info += f"Fields: {field_count}<br>"
+            hover_info += "<br><b>Has:</b><br>"
+            if info['has_account_number']:
+                hover_info += "✓ ACCOUNT_NUMBER<br>"
+            if info['has_master_account_number']:
+                hover_info += "✓ MASTER_ACCOUNT_NUMBER<br>"
+            if not info['has_account_number'] and not info['has_master_account_number']:
+                hover_info += "(No key fields)<br>"
+            
+            fig.add_trace(go.Scatter(
+                x=[x_center],
+                y=[y_center - rect_height / 4],
+                mode='text',
+                text=[field_info],
+                textfont=dict(size=9, color='#2C3E50'),
+                hoverinfo='text',
+                hovertext=hover_info,
+                showlegend=False
+            ))
+        
+        # Add legend
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None],
+            mode='lines',
+            line=dict(color='#3498DB', width=3),
+            name='Connected via ACCOUNT_NUMBER'
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None],
+            mode='lines',
+            line=dict(color='#E74C3C', width=3),
+            name='Connected via MASTER_ACCOUNT_NUMBER'
+        ))
+        
+        # Layout
+        fig.update_layout(
+            title=dict(
+                text="📊 Entity Relationship Diagram<br><sub>🔵 ACCOUNT_NUMBER | 🔴 MASTER_ACCOUNT_NUMBER | 🔗 Both</sub>",
+                x=0.5,
+                xanchor='center',
+                font=dict(size=16, color='#2C3E50', family='Arial')
+            ),
+            xaxis=dict(
+                showgrid=False, 
+                zeroline=False, 
+                showticklabels=False,
+                range=[-radius-2, radius+2]
+            ),
+            yaxis=dict(
+                showgrid=False, 
+                zeroline=False, 
+                showticklabels=False,
+                range=[-radius-2, radius+2]
+            ),
+            height=700,
+            plot_bgcolor='#FFFFFF',
+            paper_bgcolor='#F8F9FA',
+            hovermode='closest',
+            margin=dict(l=40, r=40, t=120, b=80),
+            showlegend=True,
+            legend=dict(
+                x=0.5, y=-0.1, xanchor='center', yanchor='top',
+                orientation='h', bgcolor='rgba(255,255,255,0.9)',
+                bordercolor='#2C3E50', borderwidth=1
+            )
+        )
+        
+        return fig
+        
+    except Exception as e:
+        st.error(f"Error creating ERD: {e}")
+        import traceback
+        st.error(traceback.format_exc())
+        return None
+    
+    if not PLOTLY_AVAILABLE:
+        st.warning("⚠️ Plotly not available. Install: pip install plotly networkx")
+        return None
+    
+    try:
+        # Get all entities
+        entities = list(entity_models.keys()) if entity_models else []
+        
+        if not entities:
+            return None
+        
+        # Analyze each entity
+        entity_info = {}
+        master_account_entity = None
+        
+        for entity_name, entity_df in entity_models.items():
+            # Find source field column
+            source_col = None
+            for col in entity_df.columns:
+                if 'source' in col.lower() and 'field' in col.lower():
+                    source_col = col
+                    break
+            
+            # Get all field names (uppercase for comparison)
+            field_names = []
+            if source_col:
+                field_names = [str(f).upper().strip() for f in entity_df[source_col].dropna().astype(str).tolist()]
+            
+            # Check for key fields
+            has_account_number = any('ACCOUNT' in f and 'NUMBER' in f and 'MASTER' not in f for f in field_names)
+            has_master_account_number = any('MASTER' in f and 'ACCOUNT' in f and 'NUMBER' in f for f in field_names)
+            
+            # Identify if this is the Master Account entity
+            is_master_account = 'MASTER' in entity_name.upper() and 'ACCOUNT' in entity_name.upper()
+            
+            if is_master_account:
+                master_account_entity = entity_name
+            
+            entity_info[entity_name] = {
+                'field_count': len(entity_df),
+                'field_names': field_names,
+                'has_account_number': has_account_number,
+                'has_master_account_number': has_master_account_number,
+                'is_master_account': is_master_account
+            }
+        
+        # Build relationships
+        relationships = []
+        
+        # Master Account → Child relationships
+        # Any entity with MASTER_ACCOUNT_NUMBER is a child of Master Account
+        if master_account_entity:
+            for entity_name, info in entity_info.items():
+                if entity_name != master_account_entity and info['has_master_account_number']:
+                    relationships.append({
+                        'from_entity': master_account_entity,
+                        'to_entity': entity_name,
+                        'type': 'Parent-Child',
+                        'key': 'MASTER_ACCOUNT_NUMBER',
+                        'color': '#E74C3C',
+                        'width': 4,
+                        'dash': 'solid'
+                    })
+        
+        # Find other relationships (entities with shared key fields)
         for i, entity1 in enumerate(entities):
             for entity2 in entities[i+1:]:
-                if entity1 in entity_models and entity2 in entity_models:
-                    df1 = entity_models[entity1]
-                    df2 = entity_models[entity2]
+                # Skip if already parent-child
+                already_related = any(
+                    (r['from_entity'] == entity1 and r['to_entity'] == entity2) or
+                    (r['from_entity'] == entity2 and r['to_entity'] == entity1)
+                    for r in relationships
+                )
+                
+                if not already_related:
+                    fields1 = set(entity_info[entity1]['field_names'])
+                    fields2 = set(entity_info[entity2]['field_names'])
+                    common = fields1 & fields2
                     
-                    # Find source field columns
-                    source_col1 = None
-                    source_col2 = None
+                    # Look for key fields
+                    key_fields = [f for f in common if any(kw in f for kw in ['ACCOUNT_NUMBER', 'CUSTOMER_ID', 'ID', 'NUMBER', 'KEY'])]
                     
-                    for col in df1.columns:
-                        if 'source' in col.lower() and 'field' in col.lower():
-                            source_col1 = col
-                            break
+                    if key_fields:
+                        relationships.append({
+                            'from_entity': entity1,
+                            'to_entity': entity2,
+                            'type': 'Shared Key',
+                            'key': key_fields[0],
+                            'color': '#95A5A6',
+                            'width': 2,
+                            'dash': 'dash'
+                        })
+        
+        # Layout entities in a hierarchical way
+        import math
+        
+        # Position Master Account at top center
+        entity_positions = {}
+        
+        if master_account_entity:
+            # Master at top
+            entity_positions[master_account_entity] = (5, 6)
+            
+            # Children below in a row
+            children = [e for e in entities if e != master_account_entity and entity_info[e]['has_master_account_number']]
+            other_entities = [e for e in entities if e != master_account_entity and not entity_info[e]['has_master_account_number']]
+            
+            # Position children
+            n_children = len(children)
+            if n_children > 0:
+                spacing = 3
+                start_x = 5 - (n_children - 1) * spacing / 2
+                for i, child in enumerate(children):
+                    entity_positions[child] = (start_x + i * spacing, 3)
+            
+            # Position other entities
+            n_others = len(other_entities)
+            if n_others > 0:
+                spacing = 2.5
+                start_x = 5 - (n_others - 1) * spacing / 2
+                for i, other in enumerate(other_entities):
+                    entity_positions[other] = (start_x + i * spacing, 0)
+        else:
+            # No master account, use grid layout
+            n_entities = len(entities)
+            n_cols = min(4, math.ceil(math.sqrt(n_entities)))
+            n_rows = math.ceil(n_entities / n_cols)
+            
+            entity_idx = 0
+            for row in range(n_rows):
+                for col in range(n_cols):
+                    if entity_idx < n_entities:
+                        entity_name = entities[entity_idx]
+                        x = col * 3.5
+                        y = (n_rows - 1 - row) * 3
+                        entity_positions[entity_name] = (x, y)
+                        entity_idx += 1
+        
+        fig = go.Figure()
+        
+        # Draw relationship lines
+        for rel in relationships:
+            from_entity = rel['from_entity']
+            to_entity = rel['to_entity']
+            
+            if from_entity in entity_positions and to_entity in entity_positions:
+                x1, y1 = entity_positions[from_entity]
+                x2, y2 = entity_positions[to_entity]
+                
+                # Hover text
+                hover_text = f"<b>{rel['type']}</b><br>"
+                hover_text += f"{from_entity} → {to_entity}<br>"
+                hover_text += f"via: {rel['key']}"
+                
+                # Draw line
+                fig.add_trace(go.Scatter(
+                    x=[x1, x2],
+                    y=[y1, y2],
+                    mode='lines',
+                    line=dict(color=rel['color'], width=rel['width'], dash=rel['dash']),
+                    hoverinfo='text',
+                    hovertext=hover_text,
+                    showlegend=False
+                ))
+                
+                # Add label for parent-child
+                if rel['type'] == 'Parent-Child':
+                    mid_x = (x1 + x2) / 2
+                    mid_y = (y1 + y2) / 2
                     
-                    for col in df2.columns:
-                        if 'source' in col.lower() and 'field' in col.lower():
-                            source_col2 = col
-                            break
+                    fig.add_trace(go.Scatter(
+                        x=[mid_x],
+                        y=[mid_y],
+                        mode='text',
+                        text=['M→C'],
+                        textfont=dict(size=9, color='#E74C3C', family='Arial Black'),
+                        hoverinfo='skip',
+                        showlegend=False
+                    ))
+        
+        # Draw entity rectangles
+        for entity_name, (x_center, y_center) in entity_positions.items():
+            info = entity_info[entity_name]
+            field_count = info['field_count']
+            
+            # Determine entity type and color
+            if info['is_master_account']:
+                header_color = '#C0392B'  # Dark red for master
+                entity_icon = '👑'
+                entity_type = 'Master Account'
+            elif info['has_master_account_number']:
+                header_color = '#E67E22'  # Orange for child
+                entity_icon = '📊'
+                entity_type = 'Child Account'
+            else:
+                header_color = '#3498DB'  # Blue for standard
+                entity_icon = '📋'
+                entity_type = 'Entity'
+            
+            # Rectangle dimensions
+            rect_width = 2.0
+            rect_height = 1.0
+            
+            # Coordinates
+            x0 = x_center - rect_width / 2
+            x1 = x_center + rect_width / 2
+            y0 = y_center - rect_height / 2
+            y1 = y_center + rect_height / 2
+            
+            # Border
+            fig.add_shape(
+                type="rect",
+                x0=x0, y0=y0, x1=x1, y1=y1,
+                line=dict(color="#2C3E50", width=3),
+                fillcolor="#ECF0F1",
+                layer='below'
+            )
+            
+            # Header
+            fig.add_shape(
+                type="rect",
+                x0=x0, y0=y_center, x1=x1, y1=y1,
+                line=dict(color="#2C3E50", width=0),
+                fillcolor=header_color,
+                layer='below'
+            )
+            
+            # Divider
+            fig.add_shape(
+                type="line",
+                x0=x0, y0=y_center, x1=x1, y1=y_center,
+                line=dict(color="#2C3E50", width=2)
+            )
+            
+            # Entity name
+            fig.add_trace(go.Scatter(
+                x=[x_center],
+                y=[y_center + rect_height / 4],
+                mode='text',
+                text=[f"<b>{entity_name}</b>"],
+                textfont=dict(size=11, color='white', family='Arial Black'),
+                hoverinfo='skip',
+                showlegend=False
+            ))
+            
+            # Field count
+            field_info = f"{entity_icon} {field_count} fields"
+            
+            hover_info = f"<b>{entity_name}</b><br>"
+            hover_info += f"Type: {entity_type}<br>"
+            hover_info += f"Fields: {field_count}<br>"
+            if info['has_account_number']:
+                hover_info += "✓ ACCOUNT_NUMBER<br>"
+            if info['has_master_account_number']:
+                hover_info += "✓ MASTER_ACCOUNT_NUMBER<br>"
+            
+            fig.add_trace(go.Scatter(
+                x=[x_center],
+                y=[y_center - rect_height / 4],
+                mode='text',
+                text=[field_info],
+                textfont=dict(size=9, color='#2C3E50'),
+                hoverinfo='text',
+                hovertext=hover_info,
+                showlegend=False
+            ))
+        
+        # Legend
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None],
+            mode='lines',
+            line=dict(color='#E74C3C', width=4),
+            name='Master → Child (MASTER_ACCOUNT_NUMBER)'
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None],
+            mode='lines',
+            line=dict(color='#95A5A6', width=2, dash='dash'),
+            name='Shared Key Fields'
+        ))
+        
+        # Layout
+        fig.update_layout(
+            title=dict(
+                text="📊 Entity Relationship Diagram<br><sub>👑 Master Account | 📊 Child Accounts | 📋 Other Entities</sub>",
+                x=0.5,
+                xanchor='center',
+                font=dict(size=16, color='#2C3E50', family='Arial')
+            ),
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-1, 11]),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-1, 7]),
+            height=600,
+            plot_bgcolor='#FFFFFF',
+            paper_bgcolor='#F8F9FA',
+            hovermode='closest',
+            margin=dict(l=40, r=40, t=120, b=80),
+            showlegend=True,
+            legend=dict(
+                x=0.5, y=-0.12, xanchor='center', yanchor='top',
+                orientation='h', bgcolor='rgba(255,255,255,0.9)',
+                bordercolor='#2C3E50', borderwidth=1
+            )
+        )
+        
+        return fig
+        
+    except Exception as e:
+        st.error(f"Error creating ERD: {e}")
+        import traceback
+        st.error(traceback.format_exc())
+        return None
+    
+    if not PLOTLY_AVAILABLE:
+        st.warning("⚠️ Plotly not available. Install: pip install plotly networkx")
+        return None
+    
+    try:
+        # Get all entities
+        entities = list(entity_models.keys()) if entity_models else []
+        
+        if not entities:
+            return None
+        
+        # Analyze each entity's fields
+        entity_info = {}
+        for entity_name, entity_df in entity_models.items():
+            # Count total fields
+            field_count = len(entity_df)
+            
+            # Find source field column
+            source_col = None
+            for col in entity_df.columns:
+                if 'source' in col.lower() and 'field' in col.lower():
+                    source_col = col
+                    break
+            
+            # Get all field names
+            field_names = []
+            if source_col:
+                field_names = entity_df[source_col].dropna().astype(str).tolist()
+            
+            # Check for key relationship fields
+            has_account_number = False
+            has_master_account = False
+            has_customer_id = False
+            
+            for field in field_names:
+                field_upper = field.upper()
+                if 'ACCOUNT' in field_upper and 'NUMBER' in field_upper and 'MASTER' not in field_upper:
+                    has_account_number = True
+                if 'MASTER' in field_upper and 'ACCOUNT' in field_upper:
+                    has_master_account = True
+                if 'CUSTOMER' in field_upper and 'ID' in field_upper:
+                    has_customer_id = True
+            
+            entity_info[entity_name] = {
+                'field_count': field_count,
+                'field_names': field_names,
+                'has_account_number': has_account_number,
+                'has_master_account': has_master_account,
+                'has_customer_id': has_customer_id,
+                'is_master': 'MASTER' in entity_name.upper() or 'PARENT' in entity_name.upper()
+            }
+        
+        # Build relationships based on field patterns
+        relationships = []
+        
+        # Pattern 1: Master Account → Child Account relationship
+        # Entities with MASTER_ACCOUNT_NUMBER are children of master account entity
+        master_entities = [e for e in entities if entity_info[e]['is_master']]
+        child_entities = [e for e in entities if entity_info[e]['has_master_account'] and not entity_info[e]['is_master']]
+        
+        for master_entity in master_entities:
+            for child_entity in child_entities:
+                if master_entity != child_entity:
+                    relationships.append({
+                        'from_entity': master_entity,
+                        'to_entity': child_entity,
+                        'relationship_type': 'Parent-Child',
+                        'key_field': 'MASTER_ACCOUNT_NUMBER',
+                        'description': f'{master_entity} (Parent) → {child_entity} (Child)'
+                    })
+        
+        # Pattern 2: Account Number relationships (entities sharing account number)
+        entities_with_account = [e for e in entities if entity_info[e]['has_account_number']]
+        
+        for i, entity1 in enumerate(entities_with_account):
+            for entity2 in entities_with_account[i+1:]:
+                # Find common fields between entities
+                fields1 = set([f.upper() for f in entity_info[entity1]['field_names']])
+                fields2 = set([f.upper() for f in entity_info[entity2]['field_names']])
+                common = fields1 & fields2
+                
+                # Filter for key fields
+                key_fields = [f for f in common if any(x in f for x in ['ACCOUNT', 'CUSTOMER', 'ID', 'NUMBER', 'KEY'])]
+                
+                if key_fields:
+                    # Check if it's not already a parent-child relationship
+                    is_parent_child = any(
+                        (r['from_entity'] == entity1 and r['to_entity'] == entity2) or
+                        (r['from_entity'] == entity2 and r['to_entity'] == entity1)
+                        for r in relationships if r['relationship_type'] == 'Parent-Child'
+                    )
                     
-                    if source_col1 and source_col2:
-                        fields1 = set(df1[source_col1].dropna().astype(str).str.lower())
-                        fields2 = set(df2[source_col2].dropna().astype(str).str.lower())
-                        
-                        common_fields = fields1 & fields2
-                        if len(common_fields) > 0:
-                            relationships.append({
-                                'entity1': entity1,
-                                'entity2': entity2,
-                                'common_fields': len(common_fields),
-                                'field_names': list(common_fields)[:3]  # First 3 for tooltip
-                            })
+                    if not is_parent_child:
+                        relationships.append({
+                            'from_entity': entity1,
+                            'to_entity': entity2,
+                            'relationship_type': 'Related',
+                            'key_field': key_fields[0] if key_fields else 'ACCOUNT_NUMBER',
+                            'description': f'Shared: {", ".join(key_fields[:3])}'
+                        })
+        
+        # Pattern 3: Customer relationships
+        customer_entities = [e for e in entities if 'CUSTOMER' in e.upper()]
+        entities_with_customer_id = [e for e in entities if entity_info[e]['has_customer_id']]
+        
+        for customer_entity in customer_entities:
+            for other_entity in entities_with_customer_id:
+                if customer_entity != other_entity:
+                    # Check if not already related
+                    is_related = any(
+                        (r['from_entity'] == customer_entity and r['to_entity'] == other_entity) or
+                        (r['from_entity'] == other_entity and r['to_entity'] == customer_entity)
+                        for r in relationships
+                    )
+                    
+                    if not is_related:
+                        relationships.append({
+                            'from_entity': customer_entity,
+                            'to_entity': other_entity,
+                            'relationship_type': 'Customer Link',
+                            'key_field': 'CUSTOMER_ID',
+                            'description': f'{customer_entity} → {other_entity} (CUSTOMER_ID)'
+                        })
         
         # Layout entities in a grid
         import math
         n_entities = len(entities)
-        n_cols = min(4, math.ceil(math.sqrt(n_entities)))  # Max 4 columns
+        n_cols = min(4, math.ceil(math.sqrt(n_entities)))
         n_rows = math.ceil(n_entities / n_cols)
         
         # Entity positions (center of each rectangle)
@@ -211,43 +868,479 @@ def create_entity_relationship_diagram(entity_matrix_df, entity_models):
                 if entity_idx < n_entities:
                     entity_name = entities[entity_idx]
                     x = col * 3.5
-                    y = (n_rows - 1 - row) * 3  # Top to bottom
+                    y = (n_rows - 1 - row) * 3
                     entity_positions[entity_name] = (x, y)
                     entity_idx += 1
         
         fig = go.Figure()
         
-        # Draw relationship lines first (behind rectangles)
+        # Draw relationship lines with different styles
         for rel in relationships:
-            if rel['entity1'] in entity_positions and rel['entity2'] in entity_positions:
-                x1, y1 = entity_positions[rel['entity1']]
-                x2, y2 = entity_positions[rel['entity2']]
+            from_entity = rel['from_entity']
+            to_entity = rel['to_entity']
+            
+            if from_entity in entity_positions and to_entity in entity_positions:
+                x1, y1 = entity_positions[from_entity]
+                x2, y2 = entity_positions[to_entity]
                 
-                # Line width based on number of common fields
-                line_width = min(1 + rel['common_fields'] / 5, 4)
+                # Line style based on relationship type
+                if rel['relationship_type'] == 'Parent-Child':
+                    line_color = '#E74C3C'  # Red for parent-child
+                    line_width = 4
+                    line_dash = 'solid'
+                    label = 'P-C'
+                elif rel['relationship_type'] == 'Customer Link':
+                    line_color = '#9B59B6'  # Purple for customer links
+                    line_width = 3
+                    line_dash = 'solid'
+                    label = 'CUST'
+                else:
+                    line_color = '#3498DB'  # Blue for related
+                    line_width = 2
+                    line_dash = 'dash'
+                    label = None
                 
-                # Create hover text with field names
-                hover_text = f"{rel['common_fields']} shared fields"
-                if rel['field_names']:
-                    hover_text += f"<br>e.g., {', '.join(rel['field_names'][:3])}"
+                # Create hover text
+                hover_text = f"<b>{rel['relationship_type']}</b><br>"
+                hover_text += f"{from_entity} → {to_entity}<br>"
+                hover_text += f"Key: {rel['key_field']}"
                 
+                # Draw line
                 fig.add_trace(go.Scatter(
                     x=[x1, x2],
                     y=[y1, y2],
                     mode='lines',
-                    line=dict(color='#BDC3C7', width=line_width),
+                    line=dict(color=line_color, width=line_width, dash=line_dash),
                     hoverinfo='text',
                     hovertext=hover_text,
                     showlegend=False
                 ))
+                
+                # Add relationship label for important relationships
+                if label:
+                    mid_x = (x1 + x2) / 2
+                    mid_y = (y1 + y2) / 2
+                    
+                    fig.add_trace(go.Scatter(
+                        x=[mid_x],
+                        y=[mid_y],
+                        mode='text',
+                        text=[label],
+                        textfont=dict(size=9, color=line_color, family='Arial Black'),
+                        hoverinfo='skip',
+                        showlegend=False
+                    ))
         
-        # Draw entity rectangles (traditional database table style)
+        # Draw entity rectangles
         for entity_name in entities:
             if entity_name not in entity_positions:
                 continue
                 
             x_center, y_center = entity_positions[entity_name]
-            field_count = entity_field_counts.get(entity_name, 0)
+            info = entity_info[entity_name]
+            field_count = info['field_count']
+            
+            # Determine entity type for color coding
+            is_master = info['is_master']
+            has_master = info['has_master_account']
+            
+            # Color based on entity type
+            if is_master:
+                header_color = '#E74C3C'  # Red for master/parent
+                entity_icon = '👑'
+            elif has_master:
+                header_color = '#F39C12'  # Orange for child
+                entity_icon = '📊'
+            elif 'CUSTOMER' in entity_name.upper():
+                header_color = '#9B59B6'  # Purple for customer
+                entity_icon = '👤'
+            else:
+                header_color = '#3498DB'  # Blue for regular
+                entity_icon = '📋'
+            
+            # Rectangle dimensions
+            rect_width = 1.8
+            rect_height = 0.9
+            
+            # Coordinates
+            x0 = x_center - rect_width / 2
+            x1 = x_center + rect_width / 2
+            y0 = y_center - rect_height / 2
+            y1 = y_center + rect_height / 2
+            
+            # Add rectangle border
+            fig.add_shape(
+                type="rect",
+                x0=x0, y0=y0, x1=x1, y1=y1,
+                line=dict(color="#2C3E50", width=3),
+                fillcolor="#ECF0F1",
+                layer='below'
+            )
+            
+            # Add header rectangle
+            fig.add_shape(
+                type="rect",
+                x0=x0, y0=y_center, x1=x1, y1=y1,
+                line=dict(color="#2C3E50", width=0),
+                fillcolor=header_color,
+                layer='below'
+            )
+            
+            # Add horizontal divider
+            fig.add_shape(
+                type="line",
+                x0=x0, y0=y_center, x1=x1, y1=y_center,
+                line=dict(color="#2C3E50", width=2)
+            )
+            
+            # Add entity name (header)
+            fig.add_trace(go.Scatter(
+                x=[x_center],
+                y=[y_center + rect_height / 4],
+                mode='text',
+                text=[f"<b>{entity_name}</b>"],
+                textfont=dict(size=11, color='white', family='Arial Black'),
+                hoverinfo='skip',
+                showlegend=False
+            ))
+            
+            # Add field count with icon (body)
+            entity_type = 'Master' if is_master else 'Child' if has_master else 'Standard'
+            field_info = f"{entity_icon} {field_count} fields"
+            
+            hover_info = f"<b>{entity_name}</b><br>"
+            hover_info += f"Type: {entity_type}<br>"
+            hover_info += f"Fields: {field_count}<br>"
+            if info['has_account_number']:
+                hover_info += "Has: ACCOUNT_NUMBER<br>"
+            if info['has_master_account']:
+                hover_info += "Has: MASTER_ACCOUNT_NUMBER<br>"
+            if info['has_customer_id']:
+                hover_info += "Has: CUSTOMER_ID<br>"
+            
+            fig.add_trace(go.Scatter(
+                x=[x_center],
+                y=[y_center - rect_height / 4],
+                mode='text',
+                text=[field_info],
+                textfont=dict(size=9, color='#2C3E50'),
+                hoverinfo='text',
+                hovertext=hover_info,
+                showlegend=False
+            ))
+        
+        # Add legend
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None],
+            mode='lines',
+            line=dict(color='#E74C3C', width=4),
+            name='Parent-Child (Master Account)'
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None],
+            mode='lines',
+            line=dict(color='#9B59B6', width=3),
+            name='Customer Link'
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None],
+            mode='lines',
+            line=dict(color='#3498DB', width=2, dash='dash'),
+            name='Related (Shared Fields)'
+        ))
+        
+        # Update layout
+        fig.update_layout(
+            title=dict(
+                text="📊 Entity Relationship Diagram<br><sub>👑 Master | 📊 Child | 👤 Customer | 📋 Standard</sub>",
+                x=0.5,
+                xanchor='center',
+                font=dict(size=16, color='#2C3E50', family='Arial')
+            ),
+            xaxis=dict(
+                showgrid=False, 
+                zeroline=False, 
+                showticklabels=False,
+                range=[-1, n_cols * 3.5]
+            ),
+            yaxis=dict(
+                showgrid=False, 
+                zeroline=False, 
+                showticklabels=False,
+                range=[-1, n_rows * 3 + 0.5]
+            ),
+            height=max(450, n_rows * 250),
+            plot_bgcolor='#FFFFFF',
+            paper_bgcolor='#F8F9FA',
+            hovermode='closest',
+            margin=dict(l=40, r=40, t=120, b=80),
+            showlegend=True,
+            legend=dict(
+                x=0.5,
+                y=-0.15,
+                xanchor='center',
+                yanchor='top',
+                orientation='h',
+                bgcolor='rgba(255,255,255,0.8)',
+                bordercolor='#2C3E50',
+                borderwidth=1
+            )
+        )
+        
+        return fig
+        
+    except Exception as e:
+        st.error(f"Error creating ERD: {e}")
+        import traceback
+        st.error(traceback.format_exc())
+        return None
+    """
+    Create traditional database-style ERD using Primary Key and Foreign Key relationships
+    Reads PK/FK columns from entity model to build proper relationships
+    """
+    
+    if not PLOTLY_AVAILABLE:
+        st.warning("⚠️ Plotly not available. Install: pip install plotly networkx")
+        return None
+    
+    try:
+        # Get all entities
+        entities = list(entity_models.keys()) if entity_models else []
+        
+        if not entities:
+            return None
+        
+        # Count fields per entity and identify PKs
+        entity_info = {}
+        for entity_name, entity_df in entity_models.items():
+            # Count total fields
+            field_count = len(entity_df)
+            
+            # Find Primary Key column
+            pk_col = None
+            for col in entity_df.columns:
+                col_lower = col.lower()
+                if any(x in col_lower for x in ['primary', 'pk', 'key']) and 'foreign' not in col_lower:
+                    pk_col = col
+                    break
+            
+            # Get primary keys
+            primary_keys = []
+            if pk_col:
+                primary_keys = entity_df[entity_df[pk_col].notna()][pk_col].tolist()
+            
+            entity_info[entity_name] = {
+                'field_count': field_count,
+                'primary_keys': primary_keys,
+                'pk_column': pk_col
+            }
+        
+        # Build relationships based on Foreign Keys
+        relationships = []
+        
+        for entity_name, entity_df in entity_models.items():
+            # Find Foreign Key column
+            fk_col = None
+            fk_ref_col = None  # Column that indicates which entity the FK references
+            
+            for col in entity_df.columns:
+                col_lower = col.lower()
+                if 'foreign' in col_lower and 'key' in col_lower:
+                    fk_col = col
+                if 'reference' in col_lower or 'ref' in col_lower:
+                    fk_ref_col = col
+            
+            # If we have FK information, build relationships
+            if fk_col:
+                for _, row in entity_df.iterrows():
+                    fk_value = safe_get(row, fk_col, '')
+                    
+                    # If FK is marked (Y, Yes, True, etc.)
+                    if fk_value and str(fk_value).strip().upper() in ['Y', 'YES', 'TRUE', '1', 'X']:
+                        # Get the field name
+                        source_field_col = None
+                        for col in entity_df.columns:
+                            if 'source' in col.lower() and 'field' in col.lower():
+                                source_field_col = col
+                                break
+                        
+                        if source_field_col:
+                            field_name = safe_get(row, source_field_col, '')
+                            
+                            # Try to find which entity this FK references
+                            referenced_entity = None
+                            
+                            # Method 1: Check reference column if exists
+                            if fk_ref_col:
+                                referenced_entity = safe_get(row, fk_ref_col, '')
+                            
+                            # Method 2: Match field name with PKs in other entities
+                            if not referenced_entity:
+                                field_name_lower = field_name.lower()
+                                for other_entity, info in entity_info.items():
+                                    if other_entity != entity_name:
+                                        for pk in info['primary_keys']:
+                                            pk_lower = str(pk).lower()
+                                            # Check if FK field matches PK field
+                                            if field_name_lower == pk_lower or \
+                                               field_name_lower in pk_lower or \
+                                               pk_lower in field_name_lower:
+                                                referenced_entity = other_entity
+                                                break
+                                    if referenced_entity:
+                                        break
+                            
+                            # Method 3: Infer from field name pattern (e.g., CUSTOMER_ID → Customer)
+                            if not referenced_entity:
+                                # Remove common suffixes
+                                base_name = field_name.upper().replace('_ID', '').replace('_KEY', '').replace('_NO', '').replace('_NBR', '')
+                                
+                                for other_entity in entities:
+                                    if other_entity.upper() in base_name or base_name in other_entity.upper():
+                                        referenced_entity = other_entity
+                                        break
+                            
+                            # Add relationship if we found the referenced entity
+                            if referenced_entity and referenced_entity in entities:
+                                # Check if relationship already exists
+                                rel_exists = False
+                                for rel in relationships:
+                                    if (rel['from_entity'] == entity_name and rel['to_entity'] == referenced_entity) or \
+                                       (rel['from_entity'] == referenced_entity and rel['to_entity'] == entity_name):
+                                        rel['fk_fields'].append(field_name)
+                                        rel_exists = True
+                                        break
+                                
+                                if not rel_exists:
+                                    relationships.append({
+                                        'from_entity': entity_name,
+                                        'to_entity': referenced_entity,
+                                        'fk_fields': [field_name],
+                                        'type': 'FK'
+                                    })
+        
+        # If no FK relationships found, fall back to shared field analysis
+        if not relationships:
+            for i, entity1 in enumerate(entities):
+                for entity2 in entities[i+1:]:
+                    if entity1 in entity_models and entity2 in entity_models:
+                        df1 = entity_models[entity1]
+                        df2 = entity_models[entity2]
+                        
+                        # Find source field columns
+                        source_col1 = None
+                        source_col2 = None
+                        
+                        for col in df1.columns:
+                            if 'source' in col.lower() and 'field' in col.lower():
+                                source_col1 = col
+                                break
+                        
+                        for col in df2.columns:
+                            if 'source' in col.lower() and 'field' in col.lower():
+                                source_col2 = col
+                                break
+                        
+                        if source_col1 and source_col2:
+                            fields1 = set(df1[source_col1].dropna().astype(str).str.upper())
+                            fields2 = set(df2[source_col2].dropna().astype(str).str.upper())
+                            
+                            common_fields = fields1 & fields2
+                            if len(common_fields) > 0:
+                                relationships.append({
+                                    'from_entity': entity1,
+                                    'to_entity': entity2,
+                                    'fk_fields': list(common_fields)[:3],
+                                    'type': 'Shared'
+                                })
+        
+        # Layout entities in a grid
+        import math
+        n_entities = len(entities)
+        n_cols = min(4, math.ceil(math.sqrt(n_entities)))
+        n_rows = math.ceil(n_entities / n_cols)
+        
+        # Entity positions (center of each rectangle)
+        entity_positions = {}
+        entity_idx = 0
+        for row in range(n_rows):
+            for col in range(n_cols):
+                if entity_idx < n_entities:
+                    entity_name = entities[entity_idx]
+                    x = col * 3.5
+                    y = (n_rows - 1 - row) * 3
+                    entity_positions[entity_name] = (x, y)
+                    entity_idx += 1
+        
+        fig = go.Figure()
+        
+        # Draw relationship lines with cardinality
+        for rel in relationships:
+            from_entity = rel['from_entity']
+            to_entity = rel['to_entity']
+            
+            if from_entity in entity_positions and to_entity in entity_positions:
+                x1, y1 = entity_positions[from_entity]
+                x2, y2 = entity_positions[to_entity]
+                
+                # Line style based on relationship type
+                if rel['type'] == 'FK':
+                    line_color = '#E74C3C'  # Red for FK relationships
+                    line_width = 3
+                    line_dash = 'solid'
+                else:
+                    line_color = '#BDC3C7'  # Gray for shared fields
+                    line_width = 2
+                    line_dash = 'dash'
+                
+                # Create hover text
+                hover_text = f"<b>{from_entity} → {to_entity}</b><br>"
+                if rel['type'] == 'FK':
+                    hover_text += f"Foreign Key Relationship<br>"
+                else:
+                    hover_text += f"Shared Fields<br>"
+                hover_text += f"Fields: {', '.join(rel['fk_fields'][:3])}"
+                if len(rel['fk_fields']) > 3:
+                    hover_text += f" (+{len(rel['fk_fields']) - 3} more)"
+                
+                # Draw line
+                fig.add_trace(go.Scatter(
+                    x=[x1, x2],
+                    y=[y1, y2],
+                    mode='lines',
+                    line=dict(color=line_color, width=line_width, dash=line_dash),
+                    hoverinfo='text',
+                    hovertext=hover_text,
+                    showlegend=False
+                ))
+                
+                # Add cardinality markers for FK relationships
+                if rel['type'] == 'FK':
+                    # Calculate midpoint
+                    mid_x = (x1 + x2) / 2
+                    mid_y = (y1 + y2) / 2
+                    
+                    # Add relationship type indicator
+                    fig.add_trace(go.Scatter(
+                        x=[mid_x],
+                        y=[mid_y],
+                        mode='text',
+                        text=['FK'],
+                        textfont=dict(size=8, color='#E74C3C', family='Arial Black'),
+                        hoverinfo='skip',
+                        showlegend=False
+                    ))
+        
+        # Draw entity rectangles
+        for entity_name in entities:
+            if entity_name not in entity_positions:
+                continue
+                
+            x_center, y_center = entity_positions[entity_name]
+            field_count = entity_info[entity_name]['field_count']
+            pk_count = len(entity_info[entity_name]['primary_keys'])
             
             # Rectangle dimensions
             rect_width = 1.8
@@ -284,7 +1377,7 @@ def create_entity_relationship_diagram(entity_matrix_df, entity_models):
                 line=dict(color="#2C3E50", width=2)
             )
             
-            # Add entity name (header - white text on blue)
+            # Add entity name (header)
             fig.add_trace(go.Scatter(
                 x=[x_center],
                 y=[y_center + rect_height / 4],
@@ -295,22 +1388,41 @@ def create_entity_relationship_diagram(entity_matrix_df, entity_models):
                 showlegend=False
             ))
             
-            # Add field count (body - dark text on light gray)
+            # Add field count with PK info (body)
+            field_info = f"📋 {field_count} fields"
+            if pk_count > 0:
+                field_info += f" | 🔑 {pk_count} PK"
+            
             fig.add_trace(go.Scatter(
                 x=[x_center],
                 y=[y_center - rect_height / 4],
                 mode='text',
-                text=[f"📋 {field_count} fields"],
-                textfont=dict(size=10, color='#2C3E50'),
+                text=[field_info],
+                textfont=dict(size=9, color='#2C3E50'),
                 hoverinfo='text',
-                hovertext=f"<b>{entity_name}</b><br>{field_count} fields<br>Click entity name below to view details",
+                hovertext=f"<b>{entity_name}</b><br>{field_count} fields<br>{pk_count} primary keys<br>Click entity below to view details",
                 showlegend=False
             ))
         
-        # Update layout for clean ERD look
+        # Add legend
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None],
+            mode='lines',
+            line=dict(color='#E74C3C', width=3),
+            name='FK Relationship'
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None],
+            mode='lines',
+            line=dict(color='#BDC3C7', width=2, dash='dash'),
+            name='Shared Fields'
+        ))
+        
+        # Update layout
         fig.update_layout(
             title=dict(
-                text="📊 Entity Relationship Diagram (Traditional ERD Style)",
+                text="📊 Entity Relationship Diagram (PK/FK Relationships)",
                 x=0.5,
                 xanchor='center',
                 font=dict(size=16, color='#2C3E50', family='Arial')
@@ -331,7 +1443,15 @@ def create_entity_relationship_diagram(entity_matrix_df, entity_models):
             plot_bgcolor='#FFFFFF',
             paper_bgcolor='#F8F9FA',
             hovermode='closest',
-            margin=dict(l=40, r=40, t=100, b=40)
+            margin=dict(l=40, r=40, t=100, b=60),
+            showlegend=True,
+            legend=dict(
+                x=0.5,
+                y=-0.1,
+                xanchor='center',
+                yanchor='top',
+                orientation='h'
+            )
         )
         
         return fig
