@@ -278,14 +278,11 @@ def match_sei_to_addvantage(sei_df, addv_df, entity_models=None, min_score=60, u
                         
                         # If we found both columns in this entity
                         if source_col and desc_col:
-                            # Look for exact or partial match
+                            # EXACT MATCH ONLY - no partial to avoid wrong descriptions
                             for _, entity_row in entity_df.iterrows():
                                 entity_field = safe_get(entity_row, source_col, '')
-                                if entity_field and (
-                                    normalize_text(entity_field) == normalize_text(addv_field) or
-                                    normalize_text(addv_field) in normalize_text(entity_field) or
-                                    normalize_text(entity_field) in normalize_text(addv_field)
-                                ):
+                                # Only exact match
+                                if entity_field and normalize_text(entity_field) == normalize_text(addv_field):
                                     entity_desc = safe_get(entity_row, desc_col, '')
                                     if entity_desc:
                                         addv_field_to_entity_desc[addv_field] = {
@@ -456,7 +453,9 @@ def match_sei_to_addvantage(sei_df, addv_df, entity_models=None, min_score=60, u
             addv_field_name = safe_get(addv_match, 'field_name')
             
             # Get AddVantage field description from entity model
+            # CRITICAL: Use EXACT match only to avoid getting wrong description
             addv_field_desc = ''
+            matched_entity_name = ''
             if entity_models and addv_field_name:
                 for entity_name, entity_df in entity_models.items():
                     source_col = None
@@ -472,12 +471,10 @@ def match_sei_to_addvantage(sei_df, addv_df, entity_models=None, min_score=60, u
                     if source_col and desc_col:
                         for _, entity_row in entity_df.iterrows():
                             entity_field = safe_get(entity_row, source_col, '')
-                            if entity_field and (
-                                normalize_text(entity_field) == normalize_text(addv_field_name) or
-                                normalize_text(addv_field_name) in normalize_text(entity_field) or
-                                normalize_text(entity_field) in normalize_text(addv_field_name)
-                            ):
+                            # EXACT MATCH ONLY - no partial matching to avoid wrong descriptions
+                            if entity_field and normalize_text(entity_field) == normalize_text(addv_field_name):
                                 addv_field_desc = safe_get(entity_row, desc_col, '')
+                                matched_entity_name = entity_name
                                 if addv_field_desc:
                                     break
                     
