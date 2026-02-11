@@ -198,13 +198,33 @@ def match_fields_to_entity_models(addvantage_df, entity_models, min_score=60, us
         st.warning("⚠️ No entity models loaded. Skipping matching.")
         return addvantage_df
     
-    # Initialize embedding model if semantic matching enabled
+    # Initialize multilingual-e5-large model with GPU optimization
     embedding_model = None
     if use_semantic and ML_AVAILABLE:
         try:
-            st.write("Loading embedding model for semantic matching...")
-            embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-            st.success("✅ Embedding model loaded")
+            st.write("🚀 Loading multilingual-e5-large on NVIDIA GPU...")
+            
+            # Check GPU
+            if torch.cuda.is_available():
+                gpu_name = torch.cuda.get_device_name(0)
+                gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                st.success(f"✅ GPU: {gpu_name} ({gpu_memory:.1f} GB)")
+            
+            # Load E5 model
+            embedding_model = SentenceTransformer(
+                'intfloat/multilingual-e5-large',
+                device='cuda' if torch.cuda.is_available() else 'cpu'
+            )
+            
+            # GPU optimizations for 8GB VRAM
+            if torch.cuda.is_available():
+                embedding_model.half()  # FP16 precision
+                torch.backends.cudnn.benchmark = True
+                torch.backends.cuda.matmul.allow_tf32 = True
+                st.success("✅ Model loaded with FP16 optimization (8GB GPU)")
+            else:
+                st.info("ℹ️ Using CPU (slower)")
+                
         except Exception as e:
             st.warning(f"⚠️ Could not load embedding model: {e}")
     
@@ -235,23 +255,44 @@ def match_fields_to_entity_models(addvantage_df, entity_models, min_score=60, us
     
     st.write(f"Built index with {len(entity_field_index)} entity source fields")
     
-    # Pre-compute embeddings if using semantic matching
+    # Pre-compute embeddings if using semantic matching with E5
     addv_embeddings = None
     entity_embeddings = None
     
     if use_semantic and embedding_model:
-        st.write("📊 Pre-computing embeddings for fast matching...")
+        st.write("📊 Pre-computing embeddings with E5 model...")
         
         try:
-            # AddVantage field embeddings
-            addv_texts = addvantage_df['field_name'].tolist()
-            addv_embeddings = embedding_model.encode(addv_texts, batch_size=32, show_progress_bar=False, convert_to_numpy=True)
+            # AddVantage field embeddings (with E5 passage prefix)
+            addv_texts = [f"passage: {field}" for field in addvantage_df['field_name'].tolist()]
             
-            # Entity field embeddings
-            entity_texts = [item['source_field'] for item in entity_field_index]
-            entity_embeddings = embedding_model.encode(entity_texts, batch_size=32, show_progress_bar=False, convert_to_numpy=True)
+            with torch.cuda.amp.autocast() if torch.cuda.is_available() else torch.no_grad():
+                addv_embeddings = embedding_model.encode(
+                    addv_texts,
+                    batch_size=64,
+                    show_progress_bar=True,
+                    convert_to_numpy=True,
+                    normalize_embeddings=True
+                )
             
-            st.success("✅ Embeddings pre-computed!")
+            # Entity field embeddings (with E5 passage prefix)
+            entity_texts = [f"passage: {item['source_field']}" for item in entity_field_index]
+            
+            with torch.cuda.amp.autocast() if torch.cuda.is_available() else torch.no_grad():
+                entity_embeddings = embedding_model.encode(
+                    entity_texts,
+                    batch_size=64,
+                    show_progress_bar=True,
+                    convert_to_numpy=True,
+                    normalize_embeddings=True
+                )
+            
+            st.success("✅ Embeddings pre-computed with E5!")
+            
+            # Clear GPU cache
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                
         except Exception as e:
             st.warning(f"⚠️ Embedding error: {e}")
             addv_embeddings = None
@@ -278,24 +319,27 @@ def match_fields_to_entity_models(addvantage_df, entity_models, min_score=60, us
         for ent_idx, entity_item in enumerate(entity_field_index):
             score = 0
             
-            # Exact match
+            # Exact match (highest priority)
             if addv_field_norm == entity_item['source_field_normalized']:
                 score = 100
             
-            # Partial match
-            elif addv_field_norm in entity_item['source_field_normalized'] or entity_item['source_field_normalized'] in addv_field_norm:
-                score = 80
+            # Partial match (stricter - suffix only)
+            elif not score and (addv_field_norm.endswith(entity_item['source_field_normalized']) or 
+                               entity_item['source_field_normalized'].endswith(addv_field_norm)):
+                if len(addv_field_norm) >= 3 and len(entity_item['source_field_normalized']) >= 3:
+                    score = 75
             
-            # Semantic match
-            elif use_semantic and addv_embeddings is not None:
+            # Semantic match with E5 (optimized thresholds)
+            elif not score and use_semantic and addv_embeddings is not None:
                 try:
                     similarity = np.dot(addv_embeddings[idx], entity_embeddings[ent_idx])
                     
-                    if similarity >= 0.85:
+                    # E5-optimized thresholds
+                    if similarity >= 0.80:  # Was 0.85
                         score = max(score, 90)
-                    elif similarity >= 0.75:
+                    elif similarity >= 0.70:  # Was 0.75
                         score = max(score, 75)
-                    elif similarity >= 0.65:
+                    elif similarity >= 0.60:  # Was 0.65
                         score = max(score, 65)
                 except:
                     pass
@@ -337,15 +381,29 @@ def match_fields_to_entity_models(addvantage_df, entity_models, min_score=60, us
     # Create results DataFrame
     result_df = pd.DataFrame(results)
     
-    # Summary
+    # Summary with GPU info
     unmatched_count = total - matched_count
+    
+    gpu_info = ""
+    if use_semantic and torch.cuda.is_available():
+        try:
+            gpu_memory_used = torch.cuda.max_memory_allocated(0) / 1024**3
+            gpu_info = f"\n🎮 GPU Memory Used: {gpu_memory_used:.2f} GB"
+        except:
+            pass
     
     st.success(f"""
     ✅ **Matching Complete!**
-    - Total AddVantage Fields: {total}
-    - Matched to Entity Models: {matched_count} ({matched_count/total*100:.1f}%)
-    - Unmatched (kept in results): {unmatched_count} ({unmatched_count/total*100:.1f}%)
+    🚀 Model: multilingual-e5-large (GPU-accelerated)
+    📊 Total AddVantage Fields: {total}
+    ✅ Matched to Entity Models: {matched_count} ({matched_count/total*100:.1f}%)
+    ❌ Unmatched (kept in results): {unmatched_count} ({unmatched_count/total*100:.1f}%)
+    {gpu_info}
     """)
+    
+    # Clear GPU memory
+    if use_semantic and torch.cuda.is_available():
+        torch.cuda.empty_cache()
     
     return result_df
 
