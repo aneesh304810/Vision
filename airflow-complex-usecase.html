@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Airflow: The Unreplicable Use Case</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Syne:wght@400;700;800&display=swap');
+
+  :root {
+    --bg: #0a0c10;
+    --surface: #111318;
+    --border: #1e2330;
+    --accent: #00d4aa;
+    --accent2: #ff6b35;
+    --accent3: #7c6af7;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --code-bg: #0d1117;
+    --success: #22c55e;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    line-height: 1.7;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* grid noise overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,212,170,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,212,170,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .hero {
+    position: relative;
+    padding: 80px 60px 60px;
+    border-bottom: 1px solid var(--border);
+    overflow: hidden;
+  }
+
+  .hero::after {
+    content: 'AIRFLOW';
+    position: absolute;
+    right: -20px;
+    top: 20px;
+    font-family: 'Syne', sans-serif;
+    font-size: 180px;
+    font-weight: 800;
+    color: rgba(0,212,170,0.04);
+    letter-spacing: -10px;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+
+  .badge {
+    display: inline-block;
+    padding: 4px 12px;
+    background: rgba(0,212,170,0.1);
+    border: 1px solid rgba(0,212,170,0.3);
+    color: var(--accent);
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 20px;
+  }
+
+  h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: clamp(28px, 4vw, 52px);
+    font-weight: 800;
+    line-height: 1.1;
+    margin-bottom: 16px;
+    max-width: 800px;
+  }
+
+  h1 span { color: var(--accent); }
+
+  .subtitle {
+    color: var(--muted);
+    font-size: 14px;
+    max-width: 600px;
+    margin-bottom: 0;
+  }
+
+  .content {
+    position: relative;
+    z-index: 1;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 40px 80px;
+  }
+
+  .section-label {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 60px 0 24px;
+    font-size: 11px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  .section-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, var(--border), transparent);
+  }
+
+  /* THE USE CASE TITLE */
+  .usecase-title {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    padding: 28px 32px;
+    margin-bottom: 40px;
+  }
+
+  .usecase-title h2 {
+    font-family: 'Syne', sans-serif;
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+
+  .usecase-title p {
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  /* WHY IT'S UNIQUE GRID */
+  .why-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+    margin-bottom: 40px;
+  }
+
+  .why-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 24px;
+    position: relative;
+    transition: border-color 0.2s;
+  }
+
+  .why-card:hover { border-color: var(--accent3); }
+
+  .why-card .icon {
+    font-size: 24px;
+    margin-bottom: 12px;
+    display: block;
+  }
+
+  .why-card h3 {
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    color: var(--accent3);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .why-card p { font-size: 12px; color: var(--muted); }
+
+  /* DAG VISUAL */
+  .dag-container {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    padding: 40px;
+    margin-bottom: 40px;
+    overflow-x: auto;
+  }
+
+  .dag-visual {
+    display: flex;
+    align-items: flex-start;
+    gap: 0;
+    min-width: 900px;
+    position: relative;
+  }
+
+  .dag-column {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    align-items: center;
+    flex: 1;
+    position: relative;
+  }
+
+  .dag-node {
+    padding: 10px 14px;
+    border: 1px solid;
+    font-size: 11px;
+    text-align: center;
+    white-space: nowrap;
+    position: relative;
+    cursor: pointer;
+    transition: all 0.2s;
+    min-width: 130px;
+  }
+
+  .dag-node:hover { transform: translateY(-2px); }
+
+  .dag-node.trigger   { border-color: var(--accent2); color: var(--accent2); background: rgba(255,107,53,0.08); }
+  .dag-node.sensor    { border-color: var(--warning); color: var(--warning); background: rgba(245,158,11,0.08); }
+  .dag-node.branch    { border-color: var(--accent3); color: var(--accent3); background: rgba(124,106,247,0.08); }
+  .dag-node.compute   { border-color: var(--accent); color: var(--accent); background: rgba(0,212,170,0.08); }
+  .dag-node.dynamic   { border-color: var(--success); color: var(--success); background: rgba(34,197,94,0.08); }
+  .dag-node.xcom      { border-color: #ec4899; color: #ec4899; background: rgba(236,72,153,0.08); }
+  .dag-node.terminal  { border-color: var(--muted); color: var(--muted); background: rgba(100,116,139,0.08); }
+
+  .dag-node .node-type {
+    font-size: 8px;
+    opacity: 0.6;
+    display: block;
+    margin-bottom: 2px;
+    letter-spacing: 1px;
+  }
+
+  .arrow-col {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    color: var(--border);
+    font-size: 18px;
+    padding-top: 12px;
+    gap: 12px;
+    flex: 0 0 40px;
+  }
+
+  .arrow-col span { color: var(--muted); font-size: 16px; }
+
+  .col-label {
+    font-size: 9px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 16px;
+    text-align: center;
+  }
+
+  /* FEATURE BREAKDOWN TABS */
+  .tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 0;
+    overflow-x: auto;
+  }
+
+  .tab-btn {
+    padding: 12px 20px;
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+    white-space: nowrap;
+    letter-spacing: 1px;
+  }
+
+  .tab-btn.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+    background: rgba(0,212,170,0.05);
+  }
+
+  .tab-btn:hover:not(.active) { color: var(--text); }
+
+  .tab-content {
+    display: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-top: none;
+    padding: 32px;
+    margin-bottom: 40px;
+  }
+
+  .tab-content.active { display: block; }
+
+  /* CODE BLOCKS */
+  .code-block {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    padding: 24px;
+    margin: 20px 0;
+    overflow-x: auto;
+    position: relative;
+  }
+
+  .code-block .lang-tag {
+    position: absolute;
+    top: 8px;
+    right: 12px;
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 1px;
+  }
+
+  .code-block pre {
+    font-size: 12px;
+    line-height: 1.8;
+    color: var(--text);
+  }
+
+  /* Syntax highlighting */
+  .kw  { color: #ff79c6; }
+  .fn  { color: #50fa7b; }
+  .str { color: #f1fa8c; }
+  .cm  { color: #6272a4; font-style: italic; }
+  .dec { color: #bd93f9; }
+  .num { color: #ff79c6; }
+  .cls { color: #8be9fd; }
+  .op  { color: var(--muted); }
+
+  /* COMPARISON TABLE */
+  .compare-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    margin: 20px 0;
+  }
+
+  .compare-table th {
+    padding: 12px 16px;
+    text-align: left;
+    background: rgba(0,212,170,0.08);
+    border: 1px solid var(--border);
+    font-size: 11px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  .compare-table td {
+    padding: 12px 16px;
+    border: 1px solid var(--border);
+    vertical-align: top;
+  }
+
+  .compare-table tr:hover td { background: rgba(255,255,255,0.02); }
+
+  .tick { color: var(--success); }
+  .cross { color: var(--danger); }
+  .partial { color: var(--warning); }
+
+  /* FLOW STEPS */
+  .flow-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .flow-step {
+    display: grid;
+    grid-template-columns: 60px 1fr;
+    gap: 20px;
+    position: relative;
+  }
+
+  .flow-step:not(:last-child) .step-line {
+    position: absolute;
+    left: 29px;
+    top: 44px;
+    bottom: 0;
+    width: 2px;
+    background: linear-gradient(var(--border), transparent);
+  }
+
+  .step-num {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--accent3);
+    color: var(--accent3);
+    font-size: 14px;
+    font-weight: 700;
+    flex-shrink: 0;
+    background: rgba(124,106,247,0.1);
+    margin-top: 8px;
+  }
+
+  .step-body { padding: 8px 0 32px; }
+
+  .step-body h4 {
+    font-size: 14px;
+    color: var(--text);
+    margin-bottom: 6px;
+    font-weight: 600;
+  }
+
+  .step-body p { font-size: 12px; color: var(--muted); }
+
+  .highlight-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    font-size: 10px;
+    letter-spacing: 1px;
+    margin: 4px 4px 0 0;
+    border-radius: 2px;
+  }
+
+  .pill-green  { background: rgba(34,197,94,0.15);  color: var(--success); }
+  .pill-blue   { background: rgba(124,106,247,0.15); color: var(--accent3); }
+  .pill-orange { background: rgba(255,107,53,0.15);  color: var(--accent2); }
+  .pill-teal   { background: rgba(0,212,170,0.15);   color: var(--accent); }
+  .pill-pink   { background: rgba(236,72,153,0.15);  color: #ec4899; }
+
+  /* CALLOUT */
+  .callout {
+    border-left: 3px solid var(--accent2);
+    background: rgba(255,107,53,0.06);
+    padding: 16px 20px;
+    margin: 20px 0;
+    font-size: 12px;
+  }
+
+  .callout strong { color: var(--accent2); }
+
+  /* FOOTER NOTE */
+  .footer-note {
+    border-top: 1px solid var(--border);
+    padding: 30px 40px;
+    font-size: 11px;
+    color: var(--muted);
+    text-align: center;
+    letter-spacing: 1px;
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="badge">Enterprise Architecture Deep Dive</div>
+  <h1>The Use Case <span>Only Airflow</span> Can Handle</h1>
+  <p class="subtitle">Dynamic DAG generation + XCom-driven branching + sensor-gated execution + runtime task map expansion — all in a single, observable, recoverable pipeline.</p>
+</div>
+
+<div class="content">
+
+  <div class="section-label">The Problem Space</div>
+
+  <div class="usecase-title">
+    <h2>⚡ Custody Batch: Adaptive Multi-Fund Settlement with Dynamic Task Mapping</h2>
+    <p>A financial services pipeline that ingests an unknown number of fund portfolios at runtime, runs per-fund position reconciliation in parallel, dynamically branches per instrument type, waits on external settlement signals, cross-contaminates state via XCom, and self-heals with partial re-run capability — all within a 4-hour SLA window.</p>
+  </div>
+
+  <div class="why-grid">
+    <div class="why-card">
+      <span class="icon">🗺️</span>
+      <h3>Dynamic Task Mapping</h3>
+      <p>Number of funds is unknown until a sensor reads the settlement file at runtime. Airflow 2.3+ <code>.expand()</code> creates N tasks dynamically — no pre-coded fan-out.</p>
+    </div>
+    <div class="why-card">
+      <span class="icon">🔀</span>
+      <h3>XCom-Driven Branching</h3>
+      <p>Each fund task pushes instrument metadata into XCom. A downstream BranchPythonOperator reads cross-task XComs to route equities, fixed income, and derivatives into different sub-pipelines.</p>
+    </div>
+    <div class="why-card">
+      <span class="icon">👁️</span>
+      <h3>External Signal Sensors</h3>
+      <p>SWIFT MT940 settlement confirmation is polled via a custom ExternalTaskSensor before funds close. Poke mode, timeout, and exponential backoff are all independently configured per fund.</p>
+    </div>
+    <div class="why-card">
+      <span class="icon">🔄</span>
+      <h3>Partial Re-run / Task-level Recovery</h3>
+      <p>When 3 of 47 funds fail settlement validation, only those 3 task instances are cleared and retried — not the entire DAG run. No other orchestrator does this without full job re-submission.</p>
+    </div>
+    <div class="why-card">
+      <span class="icon">🕸️</span>
+      <h3>Cross-DAG Dependency</h3>
+      <p>The downstream NAV calculation DAG is triggered only after all mapped settlement tasks succeed, via ExternalTaskSensor with <code>execution_date_fn</code> remapping for business calendar shifts.</p>
+    </div>
+    <div class="why-card">
+      <span class="icon">📊</span>
+      <h3>Unified Observability</h3>
+      <p>Every task instance — including dynamically generated ones — appears in the Airflow UI Grid View with per-instance logs, duration metrics, and retry history. Zero external tooling needed.</p>
+    </div>
+  </div>
+
+  <!-- DAG VISUAL -->
+  <div class="section-label">Pipeline Topology</div>
+
+  <div class="dag-container">
+    <div class="dag-visual">
+
+      <div class="dag-column">
+        <div class="col-label">Trigger</div>
+        <div class="dag-node trigger">
+          <span class="node-type">TRIGGER</span>
+          settlement_file<br>sensor
+        </div>
+      </div>
+
+      <div class="arrow-col"><span>→</span></div>
+
+      <div class="dag-column">
+        <div class="col-label">Fan-Out (Dynamic)</div>
+        <div class="dag-node dynamic">
+          <span class="node-type">TASK MAP</span>
+          reconcile<br>[fund_0..N]
+        </div>
+        <div class="dag-node dynamic">
+          <span class="node-type">TASK MAP</span>
+          validate<br>[fund_0..N]
+        </div>
+      </div>
+
+      <div class="arrow-col"><span>→</span></div>
+
+      <div class="dag-column">
+        <div class="col-label">XCom Read</div>
+        <div class="dag-node xcom">
+          <span class="node-type">BRANCH + XCOM</span>
+          route_by<br>instrument_type
+        </div>
+      </div>
+
+      <div class="arrow-col"><span>→</span></div>
+
+      <div class="dag-column">
+        <div class="col-label">Sub-Pipelines</div>
+        <div class="dag-node compute">
+          <span class="node-type">TASKGROUP</span>
+          equity_<br>settlement
+        </div>
+        <div class="dag-node compute">
+          <span class="node-type">TASKGROUP</span>
+          fixed_income<br>_settlement
+        </div>
+        <div class="dag-node compute">
+          <span class="node-type">TASKGROUP</span>
+          derivative<br>_settlement
+        </div>
+      </div>
+
+      <div class="arrow-col"><span>→</span></div>
+
+      <div class="dag-column">
+        <div class="col-label">External Gate</div>
+        <div class="dag-node sensor">
+          <span class="node-type">SENSOR (POKE)</span>
+          swift_mt940<br>confirmation
+        </div>
+      </div>
+
+      <div class="arrow-col"><span>→</span></div>
+
+      <div class="dag-column">
+        <div class="col-label">Close</div>
+        <div class="dag-node terminal">
+          <span class="node-type">TRIGGER DAGRUN</span>
+          nav_calc<br>_dag
+        </div>
+        <div class="dag-node terminal">
+          <span class="node-type">CALLBACK</span>
+          sla_miss<br>_alert
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- TABS -->
+  <div class="section-label">Implementation Detail</div>
+
+  <div class="tabs">
+    <button class="tab-btn active" onclick="showTab('dynamic')">Dynamic Mapping</button>
+    <button class="tab-btn" onclick="showTab('xcom')">XCom Branching</button>
+    <button class="tab-btn" onclick="showTab('sensor')">Sensor Gating</button>
+    <button class="tab-btn" onclick="showTab('recovery')">Partial Recovery</button>
+    <button class="tab-btn" onclick="showTab('compare')">vs. Other Tools</button>
+  </div>
+
+  <!-- TAB: Dynamic Mapping -->
+  <div class="tab-content active" id="tab-dynamic">
+    <div class="flow-steps">
+      <div class="flow-step">
+        <div class="step-line"></div>
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h4>Settlement file arrives → sensor fires → list of fund IDs extracted</h4>
+          <p>A <code>FileSensor</code> waits for the S3/SFTP drop. Once detected, an initial task reads the manifest and returns a <strong>list of fund IDs</strong> — which may be 12 funds today, 80 funds tomorrow.</p>
+          <div><span class="highlight-pill pill-teal">FileSensor</span><span class="highlight-pill pill-orange">@task (returns list)</span></div>
+        </div>
+      </div>
+      <div class="flow-step">
+        <div class="step-line"></div>
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h4><code>.expand()</code> creates N reconcile tasks at runtime</h4>
+          <p>Airflow's Dynamic Task Mapping API creates one <code>reconcile_fund</code> task instance <em>per fund ID</em> at DAG parse time of the run — not at authoring time. No Jinja loops, no pre-generated DAGs, no factory patterns needed.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="code-block">
+      <span class="lang-tag">Python · Airflow 2.5+</span>
+      <pre><span class="cm"># ── Dynamic Task Mapping: fan-out across unknown fund count ──</span>
+
+<span class="kw">with</span> <span class="cls">DAG</span>(<span class="str">"custody_settlement"</span>, schedule=<span class="str">"0 18 * * 1-5"</span>,
+         catchup=<span class="cls">False</span>, max_active_runs=<span class="num">1</span>) <span class="kw">as</span> dag:
+
+    <span class="dec">@task</span>
+    <span class="kw">def</span> <span class="fn">get_fund_ids</span>() -> <span class="cls">list</span>[<span class="cls">dict</span>]:
+        <span class="cm"># Reads manifest from S3 — N is unknown at authoring time</span>
+        manifest = s3.read_json(<span class="str">"s3://settlement/manifest.json"</span>)
+        <span class="kw">return</span> manifest[<span class="str">"funds"</span>]   <span class="cm"># e.g. [{"id":"F01","ccy":"USD"}, ...]</span>
+
+    <span class="dec">@task</span>
+    <span class="kw">def</span> <span class="fn">reconcile_fund</span>(fund: <span class="cls">dict</span>) -> <span class="cls">dict</span>:
+        <span class="cm"># Runs once per fund — in parallel, up to pool limit</span>
+        result = run_position_recon(fund[<span class="str">"id"</span>])
+        <span class="kw">return</span> {<span class="str">"fund_id"</span>: fund[<span class="str">"id"</span>], <span class="str">"instrument_type"</span>: result.type,
+                <span class="str">"breaks"</span>: result.breaks}
+
+    funds    = get_fund_ids()
+    recon    = reconcile_fund.<span class="fn">expand</span>(fund=funds)  <span class="cm"># ← THE MAGIC LINE</span>
+    <span class="cm"># Airflow creates N task instances, visible in Grid View</span></pre>
+    </div>
+
+    <div class="callout">
+      <strong>Why Prefect/Dagster can't match this:</strong> Prefect's <code>.map()</code> creates subflows but loses native task-level observability per item. Dagster's dynamic outputs require explicit <code>DynamicOutput</code> definitions with known fan-out shape. Neither surfaces individual mapped instances in a unified grid UI with per-instance retry.
+    </div>
+  </div>
+
+  <!-- TAB: XCom Branching -->
+  <div class="tab-content" id="tab-xcom">
+    <div class="code-block">
+      <span class="lang-tag">Python · XCom + BranchPythonOperator</span>
+      <pre><span class="dec">@task.branch</span>
+<span class="kw">def</span> <span class="fn">route_by_instrument</span>(recon_results: <span class="cls">list</span>[<span class="cls">dict</span>]) -> <span class="cls">list</span>[<span class="cls">str</span>]:
+    <span class="cm">"""
+    Reads XCom from ALL mapped reconcile tasks via the injected list.
+    Returns which downstream task IDs to activate — others are SKIPPED.
+    This is a conditional fan-in/fan-out: only active instrument
+    types proceed, avoiding unnecessary compute on quiet days.
+    """</span>
+    types = {r[<span class="str">"instrument_type"</span>] <span class="kw">for</span> r <span class="kw">in</span> recon_results}
+    active = []
+    <span class="kw">if</span> <span class="str">"EQUITY"</span>       <span class="kw">in</span> types: active.append(<span class="str">"equity.settle_equities"</span>)
+    <span class="kw">if</span> <span class="str">"FIXED_INCOME"</span> <span class="kw">in</span> types: active.append(<span class="str">"fi.settle_bonds"</span>)
+    <span class="kw">if</span> <span class="str">"DERIVATIVE"</span>   <span class="kw">in</span> types: active.append(<span class="str">"deriv.settle_otc"</span>)
+    <span class="kw">return</span> active   <span class="cm"># multiple branches can be active simultaneously</span>
+
+<span class="cm"># Wire: recon results flow into the branch via XCom automatically</span>
+router = route_by_instrument(recon_results=recon)
+
+<span class="kw">with</span> <span class="cls">TaskGroup</span>(<span class="str">"equity"</span>) <span class="kw">as</span> equity_group:
+    settle_equities = <span class="cls">PythonOperator</span>(task_id=<span class="str">"settle_equities"</span>, ...)
+
+<span class="kw">with</span> <span class="cls">TaskGroup</span>(<span class="str">"fi"</span>) <span class="kw">as</span> fi_group:
+    settle_bonds = <span class="cls">PythonOperator</span>(task_id=<span class="str">"settle_bonds"</span>, ...)
+
+router >> [equity_group, fi_group, deriv_group]</pre>
+    </div>
+
+    <div class="callout">
+      <strong>The XCom fan-in trick:</strong> When <code>recon_results</code> is declared as a parameter of the downstream task, Airflow automatically collects XComs from ALL mapped task instances (all N fund reconciliations) and passes them as a <em>single aggregated list</em>. This cross-task state aggregation with automatic fan-in is unique to Airflow's task decorator model.
+    </div>
+  </div>
+
+  <!-- TAB: Sensor Gating -->
+  <div class="tab-content" id="tab-sensor">
+    <div class="code-block">
+      <span class="lang-tag">Python · Custom Sensor with Exponential Backoff</span>
+      <pre><span class="kw">class</span> <span class="cls">SwiftMT940Sensor</span>(<span class="cls">BaseSensorOperator</span>):
+    <span class="cm">"""
+    Polls SWIFT BIC endpoint for MT940 settlement confirmation.
+    - poke_interval: starts at 60s, backs off to 300s max
+    - timeout: 14400s (4hr SLA window)
+    - mode='reschedule': releases worker slot between pokes
+      (critical for not starving the Celery worker pool)
+    - soft_fail=True: marks skipped rather than failed
+      when no settlement expected (e.g. holiday calendar)
+    """</span>
+
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, fund_id: <span class="cls">str</span>, expected_ccy: <span class="cls">str</span>, **kwargs):
+        super().__init__(
+            mode=<span class="str">"reschedule"</span>,          <span class="cm"># ← non-blocking: release slot between pokes</span>
+            timeout=<span class="num">14400</span>,
+            poke_interval=<span class="num">60</span>,
+            exponential_backoff=<span class="cls">True</span>,   <span class="cm"># ← Airflow 2.6+ native</span>
+            max_wait=<span class="num">300</span>,
+            **kwargs
+        )
+        self.fund_id = fund_id
+        self.expected_ccy = expected_ccy
+
+    <span class="kw">def</span> <span class="fn">poke</span>(self, context: <span class="cls">Context</span>) -> <span class="cls">bool</span>:
+        confirmed = swift_api.check_mt940(
+            fund=self.fund_id,
+            value_date=context[<span class="str">"logical_date"</span>].date(),
+            ccy=self.expected_ccy
+        )
+        <span class="kw">if</span> confirmed:
+            <span class="cm"># Push confirmation ref into XCom for audit trail</span>
+            context[<span class="str">"task_instance"</span>].xcom_push(
+                key=<span class="str">"swift_ref"</span>, value=confirmed.reference
+            )
+        <span class="kw">return</span> confirmed <span class="kw">is not None</span>
+
+<span class="cm"># One sensor created per currency group (also dynamically mapped)</span>
+swift_gate = <span class="cls">SwiftMT940Sensor</span>.<span class="fn">partial</span>(task_id=<span class="str">"swift_mt940_confirm"</span>)
+             .<span class="fn">expand</span>(fund_id=active_funds, expected_ccy=ccys)</pre>
+    </div>
+
+    <span class="highlight-pill pill-teal">reschedule mode</span>
+    <span class="highlight-pill pill-blue">exponential backoff</span>
+    <span class="highlight-pill pill-pink">XCom audit push</span>
+    <span class="highlight-pill pill-orange">per-fund dynamic sensor</span>
+  </div>
+
+  <!-- TAB: Recovery -->
+  <div class="tab-content" id="tab-recovery">
+    <div class="flow-steps">
+      <div class="flow-step">
+        <div class="step-line"></div>
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h4>3 of 47 fund reconciliations fail at 21:45</h4>
+          <p>The 3 mapped task instances for <code>reconcile_fund[12]</code>, <code>reconcile_fund[28]</code>, <code>reconcile_fund[41]</code> go to <code>FAILED</code> state. All other 44 instances complete successfully and downstream processing for those funds continues.</p>
+          <span class="highlight-pill pill-teal">Task-level isolation</span>
+        </div>
+      </div>
+      <div class="flow-step">
+        <div class="step-line"></div>
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h4>Ops clears only the 3 failed instances from the UI</h4>
+          <p>From the Grid View, an operator selects the 3 failed mapped instances and clicks "Clear". Airflow re-runs only those 3 tasks — the root cause (a stale position feed) is fixed upstream and the retry succeeds within 8 minutes.</p>
+          <span class="highlight-pill pill-blue">Selective clear + re-run</span>
+        </div>
+      </div>
+      <div class="flow-step">
+        <div class="step-line"></div>
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h4>DAG run completes — SLA preserved</h4>
+          <p>The 3 recovered tasks push their XCom results, the downstream <code>route_by_instrument</code> task is re-evaluated with the full 47-fund result set, and NAV calculation DAG is triggered. Total recovery time: 11 minutes. <strong>No data re-ingestion, no full re-run.</strong></p>
+          <span class="highlight-pill pill-green">SLA met</span><span class="highlight-pill pill-orange">Zero re-ingestion</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <strong>The killer differentiator:</strong> In Temporal, Prefect, or Luigi, a "re-run" means re-submitting the entire workflow or re-playing from a checkpoint. Airflow's metadata database holds every task instance state independently. You can surgically clear and re-execute any subset of tasks, in any run, including dynamically-mapped instances — while keeping successful neighbors intact.
+    </div>
+  </div>
+
+  <!-- TAB: Comparison -->
+  <div class="tab-content" id="tab-compare">
+    <table class="compare-table">
+      <thead>
+        <tr>
+          <th>Capability</th>
+          <th>Airflow 2.6+</th>
+          <th>Prefect 2/3</th>
+          <th>Dagster</th>
+          <th>Temporal</th>
+          <th>Luigi</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Dynamic task mapping (runtime N)</td>
+          <td class="tick">✔ Native .expand()</td>
+          <td class="partial">⚠ .map() — subflows, no per-item UI</td>
+          <td class="partial">⚠ DynamicOutput — fixed schema req</td>
+          <td class="cross">✘ Manual child workflow loop</td>
+          <td class="cross">✘ Not supported</td>
+        </tr>
+        <tr>
+          <td>XCom fan-in across mapped tasks</td>
+          <td class="tick">✔ Automatic aggregation</td>
+          <td class="partial">⚠ Manual result collection</td>
+          <td class="partial">⚠ Requires IO manager wiring</td>
+          <td class="cross">✘ Manual signal passing</td>
+          <td class="cross">✘ Not supported</td>
+        </tr>
+        <tr>
+          <td>Sensor with reschedule mode</td>
+          <td class="tick">✔ mode='reschedule'</td>
+          <td class="partial">⚠ Custom polling logic needed</td>
+          <td class="partial">⚠ Asset sensors only</td>
+          <td class="partial">⚠ Activity heartbeats (different model)</td>
+          <td class="cross">✘ No native sensors</td>
+        </tr>
+        <tr>
+          <td>Task-level partial re-run (not job-level)</td>
+          <td class="tick">✔ UI clear + retry</td>
+          <td class="partial">⚠ Flow-level retry only</td>
+          <td class="tick">✔ Op-level re-execution</td>
+          <td class="cross">✘ Workflow replay from start</td>
+          <td class="partial">⚠ Manual target param</td>
+        </tr>
+        <tr>
+          <td>Native cross-DAG external dependency</td>
+          <td class="tick">✔ ExternalTaskSensor</td>
+          <td class="cross">✘ Custom event needed</td>
+          <td class="partial">⚠ Asset-based only</td>
+          <td class="cross">✘ Signal-based, different model</td>
+          <td class="cross">✘ Not supported</td>
+        </tr>
+        <tr>
+          <td>SLA callbacks per task</td>
+          <td class="tick">✔ sla= on each task</td>
+          <td class="partial">⚠ Flow-level timeout only</td>
+          <td class="cross">✘ Not native</td>
+          <td class="partial">⚠ Workflow deadlines only</td>
+          <td class="cross">✘ Not supported</td>
+        </tr>
+        <tr>
+          <td>Unified grid UI for dynamic instances</td>
+          <td class="tick">✔ Grid View, per-instance logs</td>
+          <td class="cross">✘ Subflows separate, not per-item</td>
+          <td class="partial">⚠ Launchpad, different paradigm</td>
+          <td class="cross">✘ No native workflow UI</td>
+          <td class="cross">✘ Basic status page only</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+</div>
+
+<div class="footer-note">
+  AIRFLOW COMPLEX USE CASE — Dynamic Mapping + XCom Branching + Sensor Gating + Partial Recovery &nbsp;|&nbsp; Built for financial services custody batch orchestration
+</div>
+
+<script>
+function showTab(id) {
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + id).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+</body>
+</html>
