@@ -387,8 +387,45 @@ def render_logs():
 
 # ─── PPTX PARSER ─────────────────────────────────────────────────────────────
 
-def parse_pptx(file_bytes: bytes) -> dict:
-    """Extract structured content from a .pptx file."""
+def _safe_placeholder_idx(shape):
+    """
+    Safely return placeholder idx without crashing on shapes that have
+    placeholder_format set but are not true placeholders (raises pptx
+    PackageNotFoundError / ValueError: Shape is not a placeholder).
+    Returns None if anything goes wrong.
+    """
+    try:
+        pf = shape.placeholder_format
+        if pf is None:
+            return None
+        return pf.idx
+    except Exception:
+        return None
+
+
+def _safe_text(shape):
+    """Return stripped text from a shape's text frame, or ''."""
+    try:
+        return shape.text_frame.text.strip()
+    except Exception:
+        return ""
+
+
+def _safe_paragraphs(shape):
+    """Return non-empty paragraph texts from a shape's text frame."""
+    try:
+        return [p.text.strip() for p in shape.text_frame.paragraphs if p.text.strip()]
+    except Exception:
+        return []
+
+
+def parse_pptx(file_bytes):
+    """
+    Extract structured content from a .pptx file.
+    Every shape access is wrapped defensively — malformed or non-standard
+    shapes (grouped objects, charts, SmartArt, embedded OLE) are skipped
+    silently rather than crashing the whole parse.
+    """
     prs = Presentation(io.BytesIO(file_bytes))
     slides_data = []
     images = {}
@@ -403,63 +440,113 @@ def parse_pptx(file_bytes: bytes) -> dict:
             "raw_text_blocks": [],
         }
 
-        for shape in slide.shapes:
-            # Title
-            if shape.has_text_frame:
-                text = shape.text_frame.text.strip()
-                if not text:
-                    continue
-                if shape.shape_type == 13:  # Picture
-                    pass
-                elif hasattr(shape, "placeholder_format") and shape.placeholder_format:
-                    ph_idx = shape.placeholder_format.idx
-                    if ph_idx == 0:  # Title
+        try:
+            shapes = slide.shapes
+        except Exception:
+            slides_data.append(slide_info)
+            continue
+
+        for shape in shapes:
+            # ── Text extraction ───────────────────────────────────────────
+            try:
+                has_text = shape.has_text_frame
+            except Exception:
+                has_text = False
+
+            if has_text:
+                text = _safe_text(shape)
+                if text:
+                    ph_idx = _safe_placeholder_idx(shape)
+
+                    if ph_idx == 0:
+                        # Slide title placeholder
                         slide_info["title"] = text
-                    elif ph_idx == 1:  # Body
-                        for para in shape.text_frame.paragraphs:
-                            para_text = para.text.strip()
-                            if para_text:
-                                slide_info["bullets"].append(para_text)
-                    else:
+
+                    elif ph_idx == 1:
+                        # Body / content placeholder — split into bullets
+                        for para_text in _safe_paragraphs(shape):
+                            slide_info["bullets"].append(para_text)
+
+                    elif ph_idx is not None:
+                        # Other named placeholder (subtitle, footer, etc.)
                         slide_info["raw_text_blocks"].append(text)
-                else:
-                    # Non-placeholder text box
-                    lines = [p.text.strip() for p in shape.text_frame.paragraphs if p.text.strip()]
-                    if lines:
-                        if not slide_info["title"] and len(lines[0]) < 120:
-                            slide_info["title"] = lines[0]
-                            slide_info["raw_text_blocks"].extend(lines[1:])
-                        else:
-                            slide_info["raw_text_blocks"].extend(lines)
 
-            # Tables
-            if shape.has_table:
-                table_data = []
-                for row in shape.table.rows:
-                    row_data = [cell.text.strip() for cell in row.cells]
-                    table_data.append(row_data)
-                if table_data:
-                    slide_info["tables"].append(table_data)
+                    else:
+                        # Plain text box (no placeholder)
+                        lines = _safe_paragraphs(shape)
+                        if lines:
+                            if not slide_info["title"] and len(lines[0]) < 120:
+                                slide_info["title"] = lines[0]
+                                slide_info["raw_text_blocks"].extend(lines[1:])
+                            else:
+                                slide_info["raw_text_blocks"].extend(lines)
 
-            # Images
-            if shape.shape_type == 13:  # MSO_SHAPE_TYPE.PICTURE
+            # ── Table extraction ──────────────────────────────────────────
+            try:
+                if shape.has_table:
+                    table_data = []
+                    for row in shape.table.rows:
+                        row_data = [cell.text.strip() for cell in row.cells]
+                        table_data.append(row_data)
+                    if table_data:
+                        slide_info["tables"].append(table_data)
+            except Exception:
+                pass
+
+            # ── Image extraction ──────────────────────────────────────────
+            try:
+                shape_type = shape.shape_type
+            except Exception:
+                shape_type = None
+
+            if shape_type == 13:  # MSO_SHAPE_TYPE.PICTURE
                 try:
-                    img_id = f"img_{slide_idx}_{shape.shape_id}"
+                    img_id    = f"img_{slide_idx}_{shape.shape_id}"
                     img_bytes = shape.image.blob
-                    img_b64 = base64.b64encode(img_bytes).decode()
-                    img_ext = shape.image.ext
+                    img_b64   = base64.b64encode(img_bytes).decode()
+                    img_ext   = shape.image.ext
                     images[img_id] = {
-                        "data": img_b64,
-                        "ext": img_ext,
-                        "slide": slide_idx + 1,
-                        "width": shape.width,
+                        "data":   img_b64,
+                        "ext":    img_ext,
+                        "slide":  slide_idx + 1,
+                        "width":  shape.width,
                         "height": shape.height,
                     }
                     slide_info["image_ids"].append(img_id)
                 except Exception:
                     pass
 
-        # Fallback title
+            # ── Group shapes — recurse one level deep ─────────────────────
+            # shape_type 6 = MSO_SHAPE_TYPE.GROUP
+            if shape_type == 6:
+                try:
+                    for child in shape.shapes:
+                        try:
+                            if child.has_text_frame:
+                                lines = _safe_paragraphs(child)
+                                slide_info["raw_text_blocks"].extend(lines)
+                        except Exception:
+                            pass
+                        try:
+                            if child.shape_type == 13:
+                                img_id    = f"img_{slide_idx}_{child.shape_id}"
+                                img_bytes = child.image.blob
+                                img_b64   = base64.b64encode(img_bytes).decode()
+                                img_ext   = child.image.ext
+                                images[img_id] = {
+                                    "data":   img_b64,
+                                    "ext":    img_ext,
+                                    "slide":  slide_idx + 1,
+                                    "width":  child.width,
+                                    "height": child.height,
+                                }
+                                slide_info["image_ids"].append(img_id)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+        # Fallback: promote first raw block to title if still empty
         if not slide_info["title"] and slide_info["raw_text_blocks"]:
             slide_info["title"] = slide_info["raw_text_blocks"].pop(0)
 
@@ -471,40 +558,433 @@ def parse_pptx(file_bytes: bytes) -> dict:
         "images": images,
     }
 
-# ─── DESIGN SYSTEM EXTRACTOR ─────────────────────────────────────────────────
+# ─── DESIGN SYSTEM EXTRACTOR (single file) ───────────────────────────────────
 
-def extract_design_system(file_bytes: bytes) -> dict:
-    """Extract color palette, fonts, layout hints from the PPTX."""
+def extract_design_system(file_bytes):
+    """Extract color palette, fonts, layout hints from a single PPTX."""
     prs = Presentation(io.BytesIO(file_bytes))
-    colors = set()
-    fonts = set()
+    colors, fonts = set(), set()
+    bg_colors = set()
+    title_fonts, body_fonts = set(), set()
+    font_sizes = []
 
     for slide in prs.slides:
-        for shape in slide.shapes:
-            if shape.has_text_frame:
+        # Background fill color
+        try:
+            bg = slide.background.fill
+            if bg.type and bg.fore_color:
+                bg_colors.add(str(bg.fore_color.rgb))
+        except Exception:
+            pass
+
+        try:
+            shapes = slide.shapes
+        except Exception:
+            continue
+
+        for shape in shapes:
+            # Shape fill (accent blocks)
+            try:
+                fill = shape.fill
+                if fill.type == 1:
+                    colors.add(str(fill.fore_color.rgb))
+            except Exception:
+                pass
+
+            try:
+                if not shape.has_text_frame:
+                    continue
+            except Exception:
+                continue
+
+            try:
                 for para in shape.text_frame.paragraphs:
                     for run in para.runs:
-                        if run.font.name:
-                            fonts.add(run.font.name)
-                        if run.font.color and run.font.color.type:
-                            try:
+                        try:
+                            if run.font.name:
+                                fonts.add(run.font.name)
+                                if run.font.size and run.font.size >= Pt(24):
+                                    title_fonts.add(run.font.name)
+                                elif run.font.size and run.font.size <= Pt(18):
+                                    body_fonts.add(run.font.name)
+                        except Exception:
+                            pass
+                        try:
+                            if run.font.size:
+                                font_sizes.append(round(run.font.size / 12700))
+                        except Exception:
+                            pass
+                        try:
+                            if run.font.color and run.font.color.type:
                                 colors.add(str(run.font.color.rgb))
-                            except Exception:
-                                pass
+                        except Exception:
+                            pass
+            except Exception:
+                pass
 
-    # Slide dimensions
-    width_emu = prs.slide_width
+    width_emu  = prs.slide_width
     height_emu = prs.slide_height
-    aspect = "16:9" if abs(width_emu / height_emu - 16/9) < 0.1 else "4:3"
+    aspect     = "16:9" if abs(width_emu / height_emu - 16 / 9) < 0.1 else "4:3"
+    avg_font_size = round(sum(font_sizes) / len(font_sizes)) if font_sizes else 0
+    max_font_size = max(font_sizes) if font_sizes else 0
 
     return {
         "aspect_ratio": aspect,
-        "slide_width_inches": round(width_emu / 914400, 2),
+        "slide_width_inches":  round(width_emu  / 914400, 2),
         "slide_height_inches": round(height_emu / 914400, 2),
-        "detected_fonts": list(fonts)[:10],
-        "detected_colors": list(colors)[:12],
         "slide_count": len(prs.slides),
+        "all_fonts":     sorted(fonts)[:12],
+        "title_fonts":   sorted(title_fonts)[:4],
+        "body_fonts":    sorted(body_fonts)[:4],
+        "text_colors":   sorted(colors)[:16],
+        "bg_colors":     sorted(bg_colors)[:6],
+        "font_size_avg": avg_font_size,
+        "font_size_max": max_font_size,
     }
+
+
+# ─── KNOWLEDGE BASE LEARNER ───────────────────────────────────────────────────
+
+def _safe_has(shape, attr):
+    try:
+        return bool(getattr(shape, attr))
+    except Exception:
+        return False
+
+def _safe_shape_type(shape):
+    try:
+        return shape.shape_type
+    except Exception:
+        return None
+
+def _dominant_colors(color_counts, top_n=8):
+    """Return top N colors by frequency, excluding near-white and near-black."""
+    def is_neutral(hex_str):
+        try:
+            r, g, b = int(hex_str[0:2],16), int(hex_str[2:4],16), int(hex_str[4:6],16)
+            brightness = (r + g + b) / 3
+            return brightness > 230 or brightness < 20
+        except Exception:
+            return True
+
+    ranked = sorted(
+        [(c, n) for c, n in color_counts.items() if not is_neutral(c)],
+        key=lambda x: x[1], reverse=True
+    )
+    return [c for c, _ in ranked[:top_n]]
+
+
+def learn_design_system(reference_files):
+    """
+    Analyse a corpus of reference PPTXs to extract a learned design system:
+    - Color palette (dominant + accent colors)
+    - Font pairings (title vs body)
+    - Layout patterns (which layout types appear most)
+    - Spacing & sizing norms
+    - Slide structure patterns (title position, content zones)
+    Returns a structured dict that is injected into the AI prompt.
+    """
+    from collections import Counter, defaultdict
+
+    color_counter  = Counter()
+    bg_counter     = Counter()
+    font_counter   = Counter()
+    title_font_ctr = Counter()
+    body_font_ctr  = Counter()
+    font_sizes_all = []
+    layout_patterns = []
+    shape_counts   = []
+    slide_dims     = []
+
+    for file_bytes in reference_files:
+        try:
+            prs = Presentation(io.BytesIO(file_bytes))
+            w   = round(prs.slide_width  / 914400, 2)
+            h   = round(prs.slide_height / 914400, 2)
+            slide_dims.append((w, h))
+
+            for slide in prs.slides:
+                try:
+                    all_shapes = list(slide.shapes)
+                except Exception:
+                    all_shapes = []
+
+                n_shapes = len(all_shapes)
+                n_text   = sum(1 for s in all_shapes if _safe_has(s, "has_text_frame"))
+                n_images = sum(1 for s in all_shapes if _safe_shape_type(s) == 13)
+                n_tables = sum(1 for s in all_shapes if _safe_has(s, "has_table"))
+                shape_counts.append(n_shapes)
+
+                # Infer layout pattern from shape mix
+                if n_images >= 1 and n_text >= 1:
+                    layout_patterns.append("image+text")
+                elif n_tables >= 1:
+                    layout_patterns.append("table")
+                elif n_text >= 3:
+                    layout_patterns.append("multi-text")
+                elif n_text == 2:
+                    layout_patterns.append("title+body")
+                elif n_text == 1:
+                    layout_patterns.append("title-only")
+                else:
+                    layout_patterns.append("visual-only")
+
+                # Background fill
+                try:
+                    bg = slide.background.fill
+                    if bg.type:
+                        bg_counter[str(bg.fore_color.rgb)] += 1
+                except Exception:
+                    pass
+
+                for shape in slide.shapes:
+                    # Shape fill (accent blocks, colored boxes)
+                    try:
+                        fill = shape.fill
+                        if fill.type == 1:
+                            color_counter[str(fill.fore_color.rgb)] += 3
+                    except Exception:
+                        pass
+
+                    try:
+                        has_text = shape.has_text_frame
+                    except Exception:
+                        has_text = False
+
+                    if not has_text:
+                        continue
+
+                    try:
+                        for para in shape.text_frame.paragraphs:
+                            for run in para.runs:
+                                try:
+                                    if run.font.name:
+                                        font_counter[run.font.name] += 1
+                                        sz = run.font.size or 0
+                                        pt = round(sz / 12700)
+                                        font_sizes_all.append(pt)
+                                        if pt >= 24:
+                                            title_font_ctr[run.font.name] += 1
+                                        elif 0 < pt <= 18:
+                                            body_font_ctr[run.font.name] += 1
+                                except Exception:
+                                    pass
+                                try:
+                                    if run.font.color and run.font.color.type:
+                                        color_counter[str(run.font.color.rgb)] += 1
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+
+        except Exception as e:
+            continue  # skip corrupt files silently
+
+    # ── Summarise findings ────────────────────────────────────────────────────
+
+    layout_ctr = Counter(layout_patterns)
+    total_slides = sum(layout_ctr.values()) or 1
+
+    dominant_accent_colors = _dominant_colors(color_counter, top_n=8)
+    dominant_bg_colors     = _dominant_colors(bg_counter,    top_n=4)
+
+    top_title_fonts = [f for f, _ in title_font_ctr.most_common(3)]
+    top_body_fonts  = [f for f, _ in body_font_ctr.most_common(3)]
+    top_all_fonts   = [f for f, _ in font_counter.most_common(6)]
+
+    avg_font_pt  = round(sum(font_sizes_all) / len(font_sizes_all)) if font_sizes_all else 0
+    title_pt_est = max((pt for pt in font_sizes_all if pt >= 24), default=32)
+    body_pt_est  = round(
+        sum(pt for pt in font_sizes_all if 0 < pt <= 20) /
+        max(1, sum(1 for pt in font_sizes_all if 0 < pt <= 20))
+    )
+
+    avg_shapes = round(sum(shape_counts) / len(shape_counts)) if shape_counts else 0
+
+    # Most common slide dimensions
+    dim_ctr = Counter(slide_dims)
+    most_common_dim = dim_ctr.most_common(1)[0][0] if dim_ctr else (13.33, 7.5)
+
+    layout_distribution = {
+        pat: f"{round(cnt / total_slides * 100)}%"
+        for pat, cnt in layout_ctr.most_common()
+    }
+
+    learned = {
+        "source": "learned_from_reference_repository",
+        "files_analysed": len(reference_files),
+        "total_slides_analysed": total_slides,
+        "slide_dimensions": {
+            "width_inches":  most_common_dim[0],
+            "height_inches": most_common_dim[1],
+            "aspect_ratio":  "16:9" if abs(most_common_dim[0] / most_common_dim[1] - 16/9) < 0.1 else "4:3",
+        },
+        "color_palette": {
+            "accent_colors":     dominant_accent_colors,
+            "background_colors": dominant_bg_colors,
+            "primary_accent":    dominant_accent_colors[0] if dominant_accent_colors else None,
+            "secondary_accent":  dominant_accent_colors[1] if len(dominant_accent_colors) > 1 else None,
+        },
+        "typography": {
+            "title_fonts":      top_title_fonts,
+            "body_fonts":       top_body_fonts,
+            "all_detected":     top_all_fonts,
+            "recommended_pair": {
+                "display": top_title_fonts[0] if top_title_fonts else "Georgia",
+                "body":    top_body_fonts[0]  if top_body_fonts  else "Calibri",
+            },
+            "title_size_pt": title_pt_est,
+            "body_size_pt":  body_pt_est,
+            "avg_size_pt":   avg_font_pt,
+        },
+        "layout_patterns": {
+            "distribution":          layout_distribution,
+            "most_common_layout":    layout_ctr.most_common(1)[0][0] if layout_ctr else "title+body",
+            "avg_shapes_per_slide":  avg_shapes,
+            "uses_images":           layout_ctr.get("image+text", 0) > 0,
+            "uses_tables":           layout_ctr.get("table", 0) > 0,
+            "visual_slide_ratio":    f"{round(layout_ctr.get('image+text', 0) / total_slides * 100)}%",
+        },
+        "design_rules_inferred": _infer_design_rules(
+            dominant_accent_colors, dominant_bg_colors,
+            top_title_fonts, top_body_fonts,
+            layout_ctr, total_slides,
+        ),
+    }
+    return learned
+
+
+def _infer_design_rules(accent_colors, bg_colors, title_fonts, body_fonts,
+                        layout_ctr, total_slides):
+    """Generate plain-English design rules from the extracted patterns."""
+    rules = []
+
+    if accent_colors:
+        rules.append(f"Primary brand accent color is #{accent_colors[0]} — use for titles, highlights, and key shapes")
+    if len(accent_colors) > 1:
+        rules.append(f"Secondary accent color is #{accent_colors[1]} — use for supporting elements")
+
+    if bg_colors:
+        rules.append(f"Most common slide background is #{bg_colors[0]}")
+
+    if title_fonts:
+        rules.append(f"Use '{title_fonts[0]}' for all slide titles and headings")
+    if body_fonts:
+        rules.append(f"Use '{body_fonts[0]}' for body text and bullet points")
+
+    image_pct = round(layout_ctr.get("image+text", 0) / total_slides * 100)
+    if image_pct >= 40:
+        rules.append(f"Reference deck is highly visual ({image_pct}% of slides use images) — prefer image+text layouts")
+    elif image_pct >= 15:
+        rules.append(f"Reference deck uses images on ~{image_pct}% of slides — include visuals on key slides")
+
+    if layout_ctr.get("multi-text", 0) / total_slides > 0.4:
+        rules.append("Reference deck uses multi-column text layouts frequently — apply 2-column where relevant")
+
+    if layout_ctr.get("title-only", 0) / total_slides > 0.1:
+        rules.append("Reference deck uses section-break / title-only slides — maintain that rhythm for section dividers")
+
+    return rules
+
+# ─── SYSTEM PROMPT ───────────────────────────────────────────────────────────
+
+SYSTEM_PROMPT = """\
+You are a world-class presentation designer and data storytelling expert.
+
+Your task is to transform raw PowerPoint slide content into a high-end, consulting-grade presentation.
+
+You do NOT summarize slides. You RESTRUCTURE, REDESIGN, and ELEVATE them.
+
+CORE PRINCIPLES:
+- One idea per slide
+- Insight-driven titles (not descriptive)
+- Max 3–5 bullets per slide
+- Each bullet ≤ 8 words
+- No paragraphs, no long sentences
+- Prefer visuals over text
+- Preserve ALL input images (never drop them)
+- Split dense slides into multiple slides
+- Merge redundant slides
+- Ensure consistent tone, structure, and flow
+
+DESIGN INTELLIGENCE:
+- Apply the provided design system (colors, fonts, spacing)
+- Select the best layout for each slide
+- Maintain visual consistency across the deck
+- Reposition images intelligently (left, right, full, background)
+
+VISUAL RULES:
+- Use diagrams for flows, pipelines, architectures
+- Use 2-column layouts for comparisons
+- Use simple bullet layouts for key points
+- Use dashboard-style layouts for metrics
+- Avoid text-heavy slides at all costs
+
+STYLE:
+- Executive-level communication
+- Concise, confident, sharp
+- No filler words
+- No repetition
+- No unnecessary technical noise
+
+STORYLINE:
+- Ensure logical flow across slides:
+  Problem → Solution → Architecture → Value → Risks → Summary
+- Reorder slides if needed
+- Remove redundancy across slides
+
+You behave like a senior partner preparing a CTO-level presentation.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OUTPUT FORMAT — respond ONLY with valid JSON. No markdown fences. No explanation. No preamble.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+JSON SCHEMA:
+{
+  "deck_title": "string — sharp, punchy deck title",
+  "deck_theme": "dark | light",
+  "total_slides": number,
+  "slides": [
+    {
+      "id": number,
+      "title": "Insight-driven title — the takeaway, not a label",
+      "subtitle": "optional short subtitle",
+      "classification": "architecture | process | executive | comparison | metrics | technical | summary",
+      "layout": "title-hero | bullet | two-column | diagram | dashboard | image-right | image-left | section-break",
+      "visual_type": "bullets | diagram | metric-cards | comparison | flow | image",
+      "bullets": ["each bullet ≤ 8 words", "max 5 bullets"],
+      "left_column": { "heading": "string", "bullets": ["..."] },
+      "right_column": { "heading": "string", "bullets": ["..."] },
+      "metrics": [{ "value": "80%", "label": "Time Saved" }],
+      "flow_steps": ["Step A", "→", "Step B", "→", "Step C"],
+      "images": ["image_id — preserve ALL images from input"],
+      "image_placement": "left | right | full | background | none",
+      "notes": "1–2 sentence speaker note, exec-level framing",
+      "design": {
+        "theme": "light | dark",
+        "accent": "high | medium | low"
+      }
+    }
+  ]
+}
+
+LAYOUT SELECTION GUIDE:
+- title-hero    → opening/closing slides, section covers
+- bullet        → key points, findings, recommendations
+- two-column    → comparisons, pros/cons, before/after
+- diagram       → flows, pipelines, architectures, processes
+- dashboard     → KPIs, success metrics, performance data
+- image-right   → content with supporting image right
+- image-left    → image-led storytelling with content right
+- section-break → major section dividers
+
+QUALITY CHECK BEFORE OUTPUT:
+- Ensure full deck has logical flow: Problem → Solution → Architecture → Value → Risks → Summary
+- Ensure no redundancy across slides
+- Ensure titles are strong insights (not labels)
+- Ensure all input images are referenced in output
+- Ensure every slide is concise and presentation-ready
+"""
 
 # ─── LAYOUT TEMPLATES ────────────────────────────────────────────────────────
 
@@ -526,7 +1006,11 @@ CLASSIFICATION_TYPES = [
 
 # ─── AI ENGINE ───────────────────────────────────────────────────────────────
 
-def build_prompt(parsed: dict, design: dict) -> str:
+def build_prompt(parsed: dict, file_design: dict, learned_design= None):
+    """
+    Build the USER message — pure data payload only.
+    All transformation instructions live in the SYSTEM_PROMPT above.
+    """
     slides_summary = []
     for s in parsed["slides"]:
         entry = {
@@ -541,84 +1025,90 @@ def build_prompt(parsed: dict, design: dict) -> str:
         slides_summary.append(entry)
 
     image_meta = {
-        img_id: {"slide": meta["slide"], "ext": meta["ext"]}
+        img_id: {
+            "slide": meta["slide"],
+            "ext": meta["ext"],
+            "width_emu": meta["width"],
+            "height_emu": meta["height"],
+        }
         for img_id, meta in parsed["images"].items()
     }
 
-    prompt = f"""You are a world-class presentation redesign engine.
+    # ── Design system block: learned KB takes priority over file-extracted ──
+    if learned_design:
+        design_block = f"""━━━ LEARNED DESIGN SYSTEM (from {learned_design['files_analysed']} reference files · {learned_design['total_slides_analysed']} slides analysed) ━━━
+THIS IS YOUR AUTHORITATIVE STYLE GUIDE. Apply it faithfully to every slide.
 
-INPUT SLIDES:
+Color Palette:
+  Primary accent:   #{learned_design['color_palette']['primary_accent'] or 'N/A'}
+  Secondary accent: #{learned_design['color_palette']['secondary_accent'] or 'N/A'}
+  All accent colors: {learned_design['color_palette']['accent_colors']}
+  Background colors: {learned_design['color_palette']['background_colors']}
+
+Typography:
+  Title font:  {learned_design['typography']['recommended_pair']['display']}  @ {learned_design['typography']['title_size_pt']}pt
+  Body font:   {learned_design['typography']['recommended_pair']['body']}  @ {learned_design['typography']['body_size_pt']}pt
+  All detected fonts: {learned_design['typography']['all_detected']}
+
+Layout Patterns (from reference corpus):
+  Distribution: {json.dumps(learned_design['layout_patterns']['distribution'])}
+  Most common:  {learned_design['layout_patterns']['most_common_layout']}
+  Avg shapes/slide: {learned_design['layout_patterns']['avg_shapes_per_slide']}
+  Visual slide ratio: {learned_design['layout_patterns']['visual_slide_ratio']}
+
+Inferred Design Rules (apply ALL of these):
+{chr(10).join(f'  • {r}' for r in learned_design['design_rules_inferred'])}
+
+━━━ INPUT FILE DESIGN CONTEXT (secondary reference) ━━━
+{json.dumps(file_design, indent=2)}"""
+    else:
+        design_block = f"""━━━ DESIGN SYSTEM (extracted from input file only — no reference KB loaded) ━━━
+{json.dumps(file_design, indent=2)}
+
+NOTE: No reference knowledge base was provided. Upload reference PPTXs in Step 1 to enable learned design system enforcement."""
+
+    prompt = f"""Transform the following PowerPoint deck into a consulting-grade, executive-ready presentation.
+
+{design_block}
+
+━━━ INPUT SLIDES ({parsed['slide_count']} slides) ━━━
 {json.dumps(slides_summary, indent=2)}
 
-DESIGN SYSTEM (extracted from file):
-{json.dumps(design, indent=2)}
+━━━ AVAILABLE LAYOUTS ━━━
+{json.dumps(LAYOUT_TEMPLATES, indent=2)}
 
-AVAILABLE LAYOUTS: {LAYOUT_TEMPLATES}
-CLASSIFICATION OPTIONS: {CLASSIFICATION_TYPES}
+━━━ CLASSIFICATION OPTIONS ━━━
+{json.dumps(CLASSIFICATION_TYPES, indent=2)}
 
-IMAGES IN DECK (preserve ALL of them):
+━━━ IMAGES (preserve ALL — reference by image_id in output) ━━━
 {json.dumps(image_meta, indent=2)}
 
-TASK:
-Transform these slides into a consulting-grade, executive-ready deck.
+━━━ TRANSFORMATION RULES FOR THIS DECK ━━━
+- Split any slide with more than 5 bullets into multiple slides
+- Merge any slides covering the same idea
+- Every title must be an insight, not a label
+- For pipeline/flow content → use flow_steps with "→" separators
+- For metrics/KPI content → use metrics array with value + label
+- For comparison content → use left_column + right_column with headings
+- All {len(image_meta)} image(s) MUST appear in the output
+- Reorder slides: Problem → Solution → Architecture → Value → Risks → Summary
+{"- Use the learned design system colors and fonts in the 'design' field of each slide" if learned_design else ""}
 
-RULES (STRICT):
-- One clear idea per slide — split dense slides into multiple
-- Merge redundant or thin slides
-- Rewrite EVERY title as an insight (the title IS the takeaway)
-- Max 5 bullets per slide, each bullet ≤ 8 words
-- No paragraphs, no filler, no repetition
-- Preserve ALL images — reference them by their original image_id
-- Logical flow: Problem → Solution → Architecture → Value → Risks → Summary
-- Choose best layout for each slide
-- For flows/pipelines: use flow_steps array
-- For comparisons: populate left_column and right_column
-- For metrics: populate metrics array with value + label
-- Include speaker notes (1–2 sentences, exec-level framing)
+Return ONLY the JSON object. No markdown. No preamble. No explanation."""
 
-OUTPUT: Return ONLY valid JSON. No markdown. No explanation. No fences.
-
-JSON SCHEMA:
-{{
-  "deck_title": "string",
-  "deck_theme": "dark | light",
-  "total_slides": number,
-  "slides": [
-    {{
-      "id": number,
-      "title": "Insight-driven title",
-      "subtitle": "optional",
-      "classification": "one of {CLASSIFICATION_TYPES}",
-      "layout": "one of {LAYOUT_TEMPLATES}",
-      "visual_type": "bullets | diagram | metric-cards | comparison | flow | image",
-      "bullets": ["≤8 words each"],
-      "left_column": {{"heading": "", "bullets": []}},
-      "right_column": {{"heading": "", "bullets": []}},
-      "metrics": [{{"value": "", "label": ""}}],
-      "flow_steps": ["Step A", "→", "Step B"],
-      "images": ["image_id"],
-      "notes": "speaker note 1-2 sentences",
-      "design": {{
-        "theme": "light | dark",
-        "accent": "high | medium | low"
-      }}
-    }}
-  ]
-}}"""
     return prompt
 
 
-def call_qwen(prompt: str, endpoint: str, model: str, temperature: float, max_tokens: int) -> dict:
-    """Call llama.cpp OpenAI-compatible endpoint with streaming."""
+def call_qwen(prompt: str, endpoint: str, model: str, temperature: float, max_tokens: int,
+              system_prompt: str = None):
+    """Call llama.cpp OpenAI-compatible endpoint."""
+    effective_system = system_prompt if system_prompt else SYSTEM_PROMPT
     payload = {
         "model": model,
         "messages": [
             {
                 "role": "system",
-                "content": (
-                    "You are a slide transformation engine. You respond ONLY with valid JSON. "
-                    "No markdown fences. No explanation. No preamble. Pure JSON only."
-                )
+                "content": effective_system,   # ← your full designer system prompt
             },
             {"role": "user", "content": prompt}
         ],
@@ -656,7 +1146,7 @@ def hex_to_rgb(hex_str: str):
     return tuple(int(hex_str[i:i+2], 16) for i in (0, 2, 4))
 
 
-def generate_pptx(transformed: dict, images: dict) -> bytes:
+def generate_pptx(transformed: dict, images: dict):
     """Generate a styled .pptx from the transformed JSON."""
     from pptx.util import Inches, Pt, Emu
     from pptx.dml.color import RGBColor
@@ -926,9 +1416,12 @@ for key, default in [
     ("logs", []),
     ("parsed", None),
     ("design_system", None),
+    ("learned_design", None),       # ← from reference KB
+    ("kb_file_names", []),          # ← names of loaded KB files
     ("transformed", None),
     ("pptx_bytes", None),
-    ("stage", "idle"),         # idle | parsed | transformed | done
+    ("stage", "idle"),              # idle | parsed | transformed | done
+    ("system_prompt", SYSTEM_PROMPT),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -986,6 +1479,31 @@ with st.sidebar:
 
     st.markdown("---")
 
+    # ── Editable system prompt ────────────────────────────────────────────
+    with st.expander("✏️ Edit System Prompt", expanded=False):
+        st.markdown(
+            '<div style="font-size:0.7rem;color:#6b7280;font-family:DM Mono,monospace;'
+            'margin-bottom:0.5rem;">Modify the designer persona & rules sent to Qwen2.5</div>',
+            unsafe_allow_html=True,
+        )
+        edited_prompt = st.text_area(
+            "System Prompt",
+            value=st.session_state.system_prompt,
+            height=320,
+            label_visibility="collapsed",
+        )
+        col_save, col_reset = st.columns(2)
+        with col_save:
+            if st.button("💾 Save", use_container_width=True):
+                st.session_state.system_prompt = edited_prompt
+                st.success("Saved")
+        with col_reset:
+            if st.button("↩ Reset", use_container_width=True):
+                st.session_state.system_prompt = SYSTEM_PROMPT
+                st.success("Reset to default")
+
+    st.markdown("---")
+
     # Status indicator
     stage_map = {
         "idle":        ("off",  "Waiting for upload"),
@@ -994,13 +1512,20 @@ with st.sidebar:
         "done":        ("ok",   "PPTX generated"),
     }
     dot_cls, stage_label = stage_map.get(st.session_state.stage, ("off", "idle"))
+    kb_dot   = "ok"  if st.session_state.learned_design else "off"
+    kb_label = f"{st.session_state.learned_design['files_analysed']} ref files · {st.session_state.learned_design['total_slides_analysed']} slides" \
+               if st.session_state.learned_design else "No KB loaded"
     st.markdown(f"""
     <div class="status-bar" style="flex-direction:column;gap:0.4rem;">
         <div class="status-item">
             <div class="status-dot {dot_cls}"></div>
             <span>{stage_label}</span>
         </div>
-        <div style="font-size:0.68rem;color:#4b5563;">
+        <div class="status-item">
+            <div class="status-dot {kb_dot}"></div>
+            <span style="font-size:0.68rem;">KB: {kb_label}</span>
+        </div>
+        <div style="font-size:0.68rem;color:#4b5563;margin-top:0.2rem;">
             Slides parsed: {len(st.session_state.parsed["slides"]) if st.session_state.parsed else 0}<br>
             Images found: {len(st.session_state.parsed["images"]) if st.session_state.parsed else 0}<br>
             Output slides: {len(st.session_state.transformed["slides"]) if st.session_state.transformed else 0}
@@ -1008,9 +1533,10 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    if st.button("🔄 Reset"):
-        for k in ["logs", "parsed", "design_system", "transformed", "pptx_bytes"]:
-            st.session_state[k] = [] if k == "logs" else None
+    if st.button("🔄 Reset All"):
+        for k in ["logs", "parsed", "design_system", "learned_design",
+                  "kb_file_names", "transformed", "pptx_bytes"]:
+            st.session_state[k] = [] if k in ("logs", "kb_file_names") else None
         st.session_state.stage = "idle"
         st.rerun()
 
@@ -1026,9 +1552,114 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ── STEP 1: UPLOAD ────────────────────────────────────────────────────────────
+# ── STEP 1: KNOWLEDGE BASE ────────────────────────────────────────────────────
 
-st.markdown('<div class="section-label">01 · UPLOAD</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-label">01 · REFERENCE KNOWLEDGE BASE</div>', unsafe_allow_html=True)
+
+col_kb, col_kb_info = st.columns([2, 1])
+
+with col_kb:
+    kb_files = st.file_uploader(
+        "Upload reference PPTXs (your company's best decks)",
+        type=["pptx"],
+        accept_multiple_files=True,
+        label_visibility="collapsed",
+        key="kb_uploader",
+    )
+
+with col_kb_info:
+    st.markdown("""
+    <div class="card">
+        <div class="card-header">WHY THIS MATTERS</div>
+        <ul class="bullet-list">
+            <li>Teaches Qwen your brand colors & fonts</li>
+            <li>Learns your layout preferences</li>
+            <li>Infers spacing & visual density rules</li>
+            <li>More files = stronger design signal</li>
+        </ul>
+        <div style="margin-top:0.75rem;font-size:0.72rem;color:#6b7280;">
+            Tip: Upload 3–10 of your best existing decks
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# Process KB files when uploaded
+if kb_files:
+    new_names = sorted([f.name for f in kb_files])
+    if new_names != st.session_state.kb_file_names:
+        with st.spinner(f"Learning design system from {len(kb_files)} reference file(s)…"):
+            try:
+                kb_bytes_list = [f.read() for f in kb_files]
+                learned = learn_design_system(kb_bytes_list)
+                st.session_state.learned_design  = learned
+                st.session_state.kb_file_names   = new_names
+                log(f"KB learned from {learned['files_analysed']} files · {learned['total_slides_analysed']} slides", "ok")
+                log(f"Primary accent: #{learned['color_palette']['primary_accent']}", "info")
+                log(f"Title font: {learned['typography']['recommended_pair']['display']} · Body: {learned['typography']['recommended_pair']['body']}", "info")
+                log(f"Layout mix: {learned['layout_patterns']['distribution']}", "info")
+                for rule in learned['design_rules_inferred']:
+                    log(f"Rule: {rule}", "info")
+            except Exception as e:
+                log(f"KB learning error: {e}", "err")
+                st.error(f"❌ Failed to process reference files: {e}")
+
+# Show learned design system summary
+if st.session_state.learned_design:
+    ld = st.session_state.learned_design
+    cp = ld["color_palette"]
+    ty = ld["typography"]
+    lp = ld["layout_patterns"]
+
+    st.markdown(f"""
+    <div class="card" style="border-color:rgba(79,142,247,0.3);margin-top:0.5rem;">
+        <div class="card-header">✓ LEARNED DESIGN SYSTEM — {ld['files_analysed']} files · {ld['total_slides_analysed']} slides</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;">
+
+            <div>
+                <div style="font-size:0.72rem;color:#6b7280;margin-bottom:0.4rem;font-family:DM Mono,monospace;">COLOR PALETTE</div>
+                <div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.5rem;">
+                    {"".join(f'<div title="#{c}" style="width:22px;height:22px;border-radius:4px;background:#{c};border:1px solid rgba(255,255,255,0.1);"></div>' for c in cp["accent_colors"][:8])}
+                </div>
+                <div style="font-size:0.72rem;color:#9ca3af;">
+                    Primary: <code style="color:#4f8ef7;">#{cp["primary_accent"] or "N/A"}</code><br>
+                    Secondary: <code style="color:#4f8ef7;">#{cp["secondary_accent"] or "N/A"}</code>
+                </div>
+            </div>
+
+            <div>
+                <div style="font-size:0.72rem;color:#6b7280;margin-bottom:0.4rem;font-family:DM Mono,monospace;">TYPOGRAPHY</div>
+                <div style="font-size:0.8rem;color:#e8eaf0;">
+                    <span style="color:#4f8ef7;">Title:</span> {ty["recommended_pair"]["display"]} @ {ty["title_size_pt"]}pt<br>
+                    <span style="color:#4f8ef7;">Body:</span>  {ty["recommended_pair"]["body"]} @ {ty["body_size_pt"]}pt
+                </div>
+            </div>
+
+            <div>
+                <div style="font-size:0.72rem;color:#6b7280;margin-bottom:0.4rem;font-family:DM Mono,monospace;">LAYOUT MIX</div>
+                {"".join(f'<div style="font-size:0.72rem;color:#9ca3af;line-height:1.7;">{pat}: <span style="color:#4f8ef7;">{pct}</span></div>' for pat, pct in list(lp["distribution"].items())[:5])}
+            </div>
+
+        </div>
+        <div style="margin-top:0.75rem;border-top:1px solid #2a2f42;padding-top:0.75rem;">
+            <div style="font-size:0.7rem;color:#6b7280;font-family:DM Mono,monospace;margin-bottom:0.35rem;">INFERRED RULES</div>
+            {"".join(f'<div style="font-size:0.75rem;color:#c8cdd8;padding:0.15rem 0;">▸ {r}</div>' for r in ld["design_rules_inferred"])}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+else:
+    st.markdown("""
+    <div style="padding:0.75rem 1rem;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);
+                border-radius:8px;font-size:0.8rem;color:#fbbf24;margin-top:0.5rem;">
+        ⚠️ No reference knowledge base loaded — AI will use default design judgment.
+        Upload your company's best PPTXs above for branded output.
+    </div>
+    """, unsafe_allow_html=True)
+
+st.markdown("---")
+
+# ── STEP 2: UPLOAD TARGET PPTX ───────────────────────────────────────────────
+
+st.markdown('<div class="section-label">02 · UPLOAD TARGET PRESENTATION</div>', unsafe_allow_html=True)
 
 col_up, col_info = st.columns([2, 1])
 
@@ -1044,8 +1675,8 @@ with col_info:
     <div class="card">
         <div class="card-header">WHAT HAPPENS</div>
         <ul class="bullet-list">
-            <li>Parse all slides, text & images</li>
-            <li>Extract design system from file</li>
+            <li>Parse all slides, text &amp; images</li>
+            <li>Apply learned design system</li>
             <li>Send to Qwen2.5 for transformation</li>
             <li>Generate executive-grade .pptx</li>
         </ul>
@@ -1061,25 +1692,25 @@ if uploaded and st.session_state.stage == "idle":
             st.session_state.stage         = "parsed"
             log(f"Parsed {st.session_state.parsed['slide_count']} slides", "ok")
             log(f"Found {len(st.session_state.parsed['images'])} images", "ok")
-            log(f"Design system extracted — fonts: {st.session_state.design_system['detected_fonts']}", "info")
+            log(f"File fonts: {st.session_state.design_system['all_fonts']}", "info")
         except Exception as e:
             log(f"Parse error: {e}", "err")
             st.error(f"Failed to parse PPTX: {e}")
 
-# ── STEP 2: PARSE SUMMARY ─────────────────────────────────────────────────────
+# ── STEP 3: PARSE SUMMARY ─────────────────────────────────────────────────────
 
 if st.session_state.parsed:
     parsed = st.session_state.parsed
     ds     = st.session_state.design_system
 
-    st.markdown('<div class="section-label">02 · PARSED CONTENT</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-label">03 · PARSED CONTENT</div>', unsafe_allow_html=True)
 
     c1, c2, c3, c4 = st.columns(4)
     for col, val, label in [
-        (c1, parsed["slide_count"],     "Slides"),
-        (c2, len(parsed["images"]),      "Images"),
-        (c3, ds.get("aspect_ratio","?"), "Aspect"),
-        (c4, len(ds.get("detected_fonts",[])), "Fonts detected"),
+        (c1, parsed["slide_count"],       "Slides"),
+        (c2, len(parsed["images"]),        "Images"),
+        (c3, ds.get("aspect_ratio", "?"), "Aspect"),
+        (c4, len(ds.get("all_fonts", [])), "Fonts detected"),
     ]:
         col.markdown(f"""
         <div class="metric-card" style="text-align:center;padding:1rem;">
@@ -1102,20 +1733,49 @@ if st.session_state.parsed:
             </div>
             """, unsafe_allow_html=True)
 
-# ── STEP 3: AI TRANSFORM ──────────────────────────────────────────────────────
+# ── STEP 4: AI TRANSFORM ──────────────────────────────────────────────────────
 
 if st.session_state.stage == "parsed":
-    st.markdown('<div class="section-label">03 · AI TRANSFORM</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-label">04 · AI TRANSFORM</div>', unsafe_allow_html=True)
+
+    kb_loaded = st.session_state.learned_design is not None
+    if not kb_loaded:
+        st.markdown("""
+        <div style="padding:0.6rem 1rem;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);
+                    border-radius:8px;font-size:0.8rem;color:#fbbf24;margin-bottom:0.75rem;">
+            ⚠️ No KB loaded — transformation will use default design judgment.
+            Go back to Step 01 to upload reference PPTXs.
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        ld = st.session_state.learned_design
+        st.markdown(f"""
+        <div style="padding:0.6rem 1rem;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);
+                    border-radius:8px;font-size:0.8rem;color:#4ade80;margin-bottom:0.75rem;">
+            ✓ Design KB active — {ld['files_analysed']} ref files · {ld['total_slides_analysed']} slides ·
+            Primary accent: #{ld['color_palette']['primary_accent']} ·
+            Fonts: {ld['typography']['recommended_pair']['display']} / {ld['typography']['recommended_pair']['body']}
+        </div>
+        """, unsafe_allow_html=True)
 
     if st.button("⚡ Transform with Qwen2.5", use_container_width=True):
-        prompt = build_prompt(st.session_state.parsed, st.session_state.design_system)
-        log(f"Sending {len(prompt):,} chars to {llm_endpoint}", "info")
+        prompt = build_prompt(
+            st.session_state.parsed,
+            st.session_state.design_system,
+            learned_design=st.session_state.learned_design,   # ← KB injected here
+        )
+        active_sysprompt = st.session_state.system_prompt
+        log(f"System prompt: {len(active_sysprompt):,} chars | User prompt: {len(prompt):,} chars", "info")
+        log(f"Sending to {llm_endpoint}", "info")
 
         progress = st.progress(0, text="Calling Qwen2.5…")
 
         try:
             progress.progress(20, text="Waiting for model response…")
-            result = call_qwen(prompt, llm_endpoint, llm_model, temperature, max_tokens)
+            result = call_qwen(
+                prompt, llm_endpoint, llm_model, temperature, max_tokens,
+                system_prompt=active_sysprompt,
+            )
             progress.progress(80, text="Parsing JSON response…")
             st.session_state.transformed = result
             st.session_state.stage = "transformed"
@@ -1136,12 +1796,12 @@ if st.session_state.stage == "parsed":
             st.error(f"❌ {e}")
             progress.empty()
 
-# ── STEP 4: RESULTS ───────────────────────────────────────────────────────────
+# ── STEP 5: RESULTS ───────────────────────────────────────────────────────────
 
 if st.session_state.transformed:
     t = st.session_state.transformed
 
-    st.markdown('<div class="section-label">04 · TRANSFORMED DECK</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-label">05 · TRANSFORMED DECK</div>', unsafe_allow_html=True)
 
     st.markdown(f"""
     <div class="deck-header">
@@ -1238,10 +1898,10 @@ if st.session_state.transformed:
     with st.expander("🔍 View raw JSON output"):
         st.json(t)
 
-# ── STEP 5: GENERATE PPTX ─────────────────────────────────────────────────────
+# ── STEP 6: GENERATE PPTX ─────────────────────────────────────────────────────
 
 if st.session_state.transformed and st.session_state.stage == "transformed":
-    st.markdown('<div class="section-label">05 · GENERATE & DOWNLOAD</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-label">06 · GENERATE & DOWNLOAD</div>', unsafe_allow_html=True)
 
     col_gen, col_dl = st.columns([1, 1])
 
