@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Snowflake vs Databricks — Legacy Bank Scorecard</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
+
+  :root {
+    --bg: #f8f6f1;
+    --surface: #ffffff;
+    --surface2: #f2efe8;
+    --border: #e0d9cc;
+    --sf: #0ea5e9;
+    --sf-dim: #0369a1;
+    --sf-bg: #f0f9ff;
+    --db: #e85d04;
+    --db-dim: #9c2c00;
+    --db-bg: #fff4ee;
+    --text: #1a1714;
+    --text-mid: #4a4540;
+    --text-dim: #9a9088;
+    --green: #16a34a;
+    --yellow: #ca8a04;
+    --red: #dc2626;
+    --win-sf: #0ea5e9;
+    --win-db: #e85d04;
+    --tie: #7c6d5a;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    font-family: 'DM Sans', sans-serif;
+    color: var(--text);
+    min-height: 100vh;
+    padding: 40px 24px;
+  }
+
+  /* Header */
+  .header {
+    max-width: 1000px;
+    margin: 0 auto 40px;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 24px;
+  }
+  .header-product {
+    text-align: center;
+    padding: 20px;
+    border-radius: 12px;
+  }
+  .header-product.sf { background: var(--sf-bg); border: 2px solid var(--sf); }
+  .header-product.db { background: var(--db-bg); border: 2px solid var(--db); }
+  .header-product .logo {
+    font-family: 'Syne', sans-serif;
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin-bottom: 4px;
+  }
+  .header-product.sf .logo { color: var(--sf-dim); }
+  .header-product.db .logo { color: var(--db-dim); }
+  .header-product .tagline {
+    font-size: 11px;
+    font-family: 'DM Mono', monospace;
+    color: var(--text-dim);
+    letter-spacing: 0.05em;
+  }
+  .vs-block {
+    text-align: center;
+  }
+  .vs-block .vs {
+    font-family: 'Syne', sans-serif;
+    font-size: 32px;
+    font-weight: 800;
+    color: var(--text-dim);
+    display: block;
+  }
+  .vs-block .context {
+    font-size: 10px;
+    font-family: 'DM Mono', monospace;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    line-height: 1.6;
+    margin-top: 4px;
+  }
+
+  /* Final score banner */
+  .score-banner {
+    max-width: 1000px;
+    margin: 0 auto 32px;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .score-cell {
+    padding: 20px 28px;
+    text-align: center;
+  }
+  .score-cell .score-num {
+    font-family: 'Syne', sans-serif;
+    font-size: 48px;
+    font-weight: 800;
+    line-height: 1;
+  }
+  .score-cell.sf .score-num { color: var(--sf); }
+  .score-cell.db .score-num { color: var(--db); }
+  .score-cell .score-label {
+    font-size: 11px;
+    font-family: 'DM Mono', monospace;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-top: 4px;
+  }
+  .score-mid {
+    padding: 20px;
+    text-align: center;
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+  }
+  .score-mid .verdict {
+    font-family: 'Syne', sans-serif;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--sf-dim);
+    margin-bottom: 4px;
+  }
+  .score-mid .verdict-sub {
+    font-size: 11px;
+    font-family: 'DM Mono', monospace;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+
+  /* Scorecard table */
+  .scorecard {
+    max-width: 1000px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+
+  .sc-header {
+    display: grid;
+    grid-template-columns: 2fr 3fr 3fr 80px;
+    background: var(--text);
+    color: white;
+    padding: 12px 20px;
+    gap: 16px;
+    align-items: center;
+  }
+  .sc-header .col-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    opacity: 0.7;
+  }
+  .sc-header .col-label.sf-col { color: #7dd3fc; }
+  .sc-header .col-label.db-col { color: #fdba74; }
+
+  .sc-category {
+    background: var(--surface2);
+    padding: 8px 20px;
+    font-family: 'Syne', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .cat-icon { font-size: 14px; }
+
+  .sc-row {
+    display: grid;
+    grid-template-columns: 2fr 3fr 3fr 80px;
+    gap: 16px;
+    padding: 14px 20px;
+    border-top: 1px solid var(--border);
+    align-items: start;
+    transition: background 0.15s;
+  }
+  .sc-row:hover { background: #fafaf8; }
+
+  .sc-criterion {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.4;
+  }
+  .sc-criterion .weight {
+    display: inline-block;
+    font-size: 9px;
+    font-family: 'DM Mono', monospace;
+    background: var(--surface2);
+    color: var(--text-dim);
+    padding: 2px 6px;
+    border-radius: 3px;
+    margin-left: 6px;
+    vertical-align: middle;
+    font-weight: 400;
+  }
+
+  .sc-cell {
+    font-size: 12px;
+    color: var(--text-mid);
+    line-height: 1.6;
+    padding: 4px 10px;
+    border-radius: 6px;
+  }
+  .sc-cell.winner-sf {
+    background: var(--sf-bg);
+    border-left: 3px solid var(--sf);
+    color: var(--text);
+  }
+  .sc-cell.winner-db {
+    background: var(--db-bg);
+    border-left: 3px solid var(--db);
+    color: var(--text);
+  }
+  .sc-cell.tie {
+    background: var(--surface2);
+    border-left: 3px solid var(--border);
+  }
+
+  .sc-winner {
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .winner-badge {
+    font-size: 10px;
+    font-family: 'DM Mono', monospace;
+    font-weight: 500;
+    padding: 4px 8px;
+    border-radius: 4px;
+    letter-spacing: 0.05em;
+  }
+  .winner-badge.sf { background: var(--sf-bg); color: var(--sf-dim); border: 1px solid var(--sf); }
+  .winner-badge.db { background: var(--db-bg); color: var(--db-dim); border: 1px solid var(--db); }
+  .winner-badge.tie { background: var(--surface2); color: var(--tie); border: 1px solid var(--border); }
+
+  /* Bottom section */
+  .bottom-grid {
+    max-width: 1000px;
+    margin: 28px auto 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .bottom-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .bottom-card h3 {
+    font-family: 'Syne', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 14px;
+  }
+  .bottom-card.sf-card h3 { color: var(--sf-dim); }
+  .bottom-card.db-card h3 { color: var(--db-dim); }
+  .bottom-card.verdict-card h3 { color: var(--text); }
+  .bottom-card ul {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .bottom-card ul li {
+    font-size: 12px;
+    color: var(--text-mid);
+    line-height: 1.5;
+    padding-left: 16px;
+    position: relative;
+  }
+  .bottom-card ul li::before {
+    content: '→';
+    position: absolute;
+    left: 0;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+  }
+  .bottom-card.sf-card ul li::before { color: var(--sf); }
+  .bottom-card.db-card ul li::before { color: var(--db); }
+
+  /* Verdict card */
+  .verdict-final {
+    max-width: 1000px;
+    margin: 16px auto 0;
+    background: var(--text);
+    color: white;
+    border-radius: 12px;
+    padding: 24px 28px;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 24px;
+    align-items: center;
+  }
+  .verdict-score-big {
+    font-family: 'Syne', sans-serif;
+    font-size: 14px;
+    font-weight: 800;
+    color: var(--sf);
+    text-align: center;
+    line-height: 1.3;
+    white-space: nowrap;
+  }
+  .verdict-score-big span {
+    display: block;
+    font-size: 11px;
+    color: rgba(255,255,255,0.4);
+    font-family: 'DM Mono', monospace;
+    font-weight: 400;
+    letter-spacing: 0.08em;
+    margin-bottom: 4px;
+  }
+  .verdict-text {
+    font-size: 13px;
+    line-height: 1.7;
+    color: rgba(255,255,255,0.75);
+  }
+  .verdict-text strong { color: white; }
+
+  .legend-row {
+    max-width: 1000px;
+    margin: 0 auto 20px;
+    display: flex;
+    gap: 20px;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+  .leg-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-family: 'DM Mono', monospace;
+    color: var(--text-dim);
+  }
+  .leg-dot { width: 10px; height: 10px; border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="header-product sf">
+    <div class="logo">Snowflake</div>
+    <div class="tagline">Cloud Data Warehouse</div>
+  </div>
+  <div class="vs-block">
+    <span class="vs">VS</span>
+    <div class="context">Legacy Bank Context<br>Relational · Regulated<br>Oracle Migration</div>
+  </div>
+  <div class="header-product db">
+    <div class="logo">Databricks</div>
+    <div class="tagline">Data + AI Lakehouse</div>
+  </div>
+</div>
+
+<!-- Score Banner -->
+<div class="score-banner">
+  <div class="score-cell sf">
+    <div class="score-num">8</div>
+    <div class="score-label">Snowflake Wins</div>
+  </div>
+  <div class="score-mid">
+    <div class="verdict">Snowflake — Clear Winner</div>
+    <div class="verdict-sub">for legacy bank Oracle migration<br>structured · regulated · relational</div>
+  </div>
+  <div class="score-cell db">
+    <div class="score-num">2</div>
+    <div class="score-label">Databricks Wins</div>
+  </div>
+</div>
+
+<!-- Legend -->
+<div class="legend-row">
+  <div class="leg-item"><div class="leg-dot" style="background:var(--sf-bg);border:1px solid var(--sf)"></div> Snowflake advantage</div>
+  <div class="leg-item"><div class="leg-dot" style="background:var(--db-bg);border:1px solid var(--db)"></div> Databricks advantage</div>
+  <div class="leg-item"><div class="leg-dot" style="background:var(--surface2);border:1px solid var(--border)"></div> Tie</div>
+</div>
+
+<!-- Scorecard -->
+<div class="scorecard">
+
+  <!-- Header row -->
+  <div class="sc-header">
+    <div class="col-label">Criterion</div>
+    <div class="col-label sf-col">❄ Snowflake</div>
+    <div class="col-label db-col">⚡ Databricks</div>
+    <div class="col-label" style="text-align:center">Winner</div>
+  </div>
+
+  <!-- CATEGORY: SQL & Relational -->
+  <div class="sc-category"><span class="cat-icon">🗄</span> SQL & Relational Compatibility</div>
+
+  <div class="sc-row">
+    <div class="sc-criterion">ANSI SQL Compliance <span class="weight">HIGH</span></div>
+    <div class="sc-cell winner-sf">Full ANSI SQL. Oracle migration path is clean — most PL/SQL logic translates directly. dbt-snowflake is best-in-class.</div>
+    <div class="sc-cell">SQL support is strong but Databricks leans Spark SQL — subtle dialect differences. More friction migrating Oracle stored procedures.</div>
+    <div class="sc-winner"><span class="winner-badge sf">SF</span></div>
+  </div>
+
+  <div class="sc-row">
+    <div class="sc-criterion">Stored Procedures & PL/SQL Migration <span class="weight">HIGH</span></div>
+    <div class="sc-cell winner-sf">Snowflake Scripting is close to PL/SQL. Snowpark lets you lift complex Oracle procs into Python/Java with familiar patterns.</div>
+    <div class="sc-cell">Databricks requires rewrite to PySpark or Delta Live Tables — significantly more effort for a legacy Oracle shop.</div>
+    <div class="sc-winner"><span class="winner-badge sf">SF</span></div>
+  </div>
+
+  <div class="sc-row">
+    <div class="sc-criterion">dbt Compatibility <span class="weight">HIGH</span></div>
+    <div class="sc-cell winner-sf">dbt-snowflake is the most mature, best-documented adapter. First-class support, every dbt feature works out of the box.</div>
+    <div class="sc-cell">dbt-databricks works but Delta-specific materializations add complexity. Some features lag behind dbt-snowflake support.</div>
+    <div class="sc-winner"><span class="winner-badge sf">SF</span></div>
+  </div>
+
+  <!-- CATEGORY: Regulatory & Compliance -->
+  <div class="sc-category"><span class="cat-icon">🏛</span> Regulatory & Compliance (NYDFS · SOC2 · Data Residency)</div>
+
+  <div class="sc-row">
+    <div class="sc-criterion">Data Residency Controls <span class="weight">HIGH</span></div>
+    <div class="sc-cell winner-sf">Single-region account isolation. Private Link native. Data never leaves designated region. NYDFS-friendly by default.</div>
+    <div class="sc-cell">Possible but requires careful Unity Catalog configuration. Multi-cloud nature adds complexity to proving data residency.</div>
+    <div class="sc-winner"><span class="winner-badge sf">SF</span></div>
+  </div>
+
+  <div class="sc-row">
+    <div class="sc-criterion">Audit & Query History <span class="weight">HIGH</span></div>
+    <div class="sc-cell winner-sf">ACCOUNT_USAGE and INFORMATION_SCHEMA — full query history, access logs, login events out of the box. NYDFS audit trail ready.</div>
+    <div class="sc-cell">Audit logs available but require Databricks Unity Catalog + Azure Monitor integration. More setup to get equivalent coverage.</div>
+    <div class="sc-winner"><span class="winner-badge sf">SF</span></div>
+  </div>
+
+  <div class="sc-row">
+    <div class="sc-criterion">Row & Column Level Security <span class="weight">MED</span></div>
+    <div class="sc-cell winner-sf">Native row access policies and column masking — critical for wealth management client data isolation.</div>
+    <div class="sc-cell">Unity Catalog supports this but configuration is more complex and Unity Catalog adoption maturity is lower.</div>
+    <div class="sc-winner"><span class="winner-badge sf">SF</span></div>
+  </div>
+
+  <!-- CATEGORY: Infrastructure & Operations -->
+  <div class="sc-category"><span class="cat-icon">⚙</span> Infrastructure & Operations</div>
+
+  <div class="sc-row">
+    <div class="sc-criterion">Zero Infrastructure Management <span class="weight">HIGH</span></div>
+    <div class="sc-cell winner-sf">True serverless — no clusters to manage, no Spark tuning, no executor config. Spin up a VW, run SQL, auto-suspend.</div>
+    <div class="sc-cell">Databricks clusters require sizing, auto-scaling config, Spark tuning. Less approachable for a SQL-first banking team.</div>
+    <div class="sc-winner"><span class="winner-badge sf">SF</span></div>
+  </div>
+
+  <div class="sc-row">
+    <div class="sc-criterion">Learning Curve for SQL Team <span class="weight">HIGH</span></div>
+    <div class="sc-cell winner-sf">SQL-first. A banker or analyst who knows Oracle can use Snowflake in days. No Spark, no JVM, no cluster concepts.</div>
+    <div class="sc-cell">Spark paradigm requires significant upskilling for a team coming from Oracle/SQL Server. PySpark is not SQL.</div>
+    <div class="sc-winner"><span class="winner-badge sf">SF</span></div>
+  </div>
+
+  <div class="sc-row">
+    <div class="sc-criterion">Cost Predictability <span class="weight">MED</span></div>
+    <div class="sc-cell winner-sf">Per-second VW billing with auto-suspend is highly predictable. Separate compute from storage clearly.</div>
+    <div class="sc-cell">DBU (Databricks Units) pricing is harder to forecast. Cluster sizing mistakes can cause bill spikes.</div>
+    <div class="sc-winner"><span class="winner-badge sf">SF</span></div>
+  </div>
+
+  <!-- CATEGORY: Data Architecture -->
+  <div class="sc-category"><span class="cat-icon">🏗</span> Data Architecture Fit</div>
+
+  <div class="sc-row">
+    <div class="sc-criterion">Structured / Tabular Data <span class="weight">HIGH</span></div>
+    <div class="sc-cell winner-sf">Purpose-built for structured relational data. Perfect fit for positions, transactions, NAV, AUM — the core of wealth management.</div>
+    <div class="sc-cell">Overkill for pure structured data. Databricks shines with semi-structured and unstructured — not BBH's primary use case today.</div>
+    <div class="sc-winner"><span class="winner-badge sf">SF</span></div>
+  </div>
+
+  <div class="sc-row">
+    <div class="sc-criterion">Time Travel & Data Recovery <span class="weight">MED</span></div>
+    <div class="sc-cell tie">Snowflake Time Travel (90 days) + Fail-safe. Point-in-time recovery built in.</div>
+    <div class="sc-cell tie">Delta Lake also has time travel via transaction log. Comparable capability.</div>
+    <div class="sc-winner"><span class="winner-badge tie">TIE</span></div>
+  </div>
+
+  <div class="sc-row">
+    <div class="sc-criterion">ML / AI Workloads <span class="weight">LOW for now</span></div>
+    <div class="sc-cell">Snowflake Cortex and Snowpark ML are growing but less mature than Databricks for training large models.</div>
+    <div class="sc-cell winner-db">Databricks is the clear winner for ML/AI — MLflow native, GPU cluster support, best-in-class for model training and feature engineering.</div>
+    <div class="sc-winner"><span class="winner-badge db">DB</span></div>
+  </div>
+
+  <div class="sc-row">
+    <div class="sc-criterion">Unstructured / Document Data <span class="weight">LOW for now</span></div>
+    <div class="sc-cell">Possible but not Snowflake's strength. VARIANT type handles JSON but not images, PDFs natively.</div>
+    <div class="sc-cell winner-db">Databricks handles unstructured data natively — PDFs, emails, documents. Better for future AI use cases on client documents.</div>
+    <div class="sc-winner"><span class="winner-badge db">DB</span></div>
+  </div>
+
+  <!-- CATEGORY: Ecosystem -->
+  <div class="sc-category"><span class="cat-icon">🔌</span> Ecosystem & Vendor Fit</div>
+
+  <div class="sc-row">
+    <div class="sc-criterion">SEI SWP Integration (current program) <span class="weight">HIGH</span></div>
+    <div class="sc-cell winner-sf">SEI's platform already runs on Snowflake. BBH VW slots directly into existing SEI account. Zero integration work.</div>
+    <div class="sc-cell">Would require a parallel Databricks environment alongside SEI's Snowflake — two platforms, two teams, higher cost and complexity.</div>
+    <div class="sc-winner"><span class="winner-badge sf">SF</span></div>
+  </div>
+
+  <div class="sc-row">
+    <div class="sc-criterion">Oracle Migration Tooling <span class="weight">HIGH</span></div>
+    <div class="sc-cell winner-sf">Snowflake's ecosystem has mature Oracle migration tools — schema conversion, data type mapping, SQL translation utilities.</div>
+    <div class="sc-cell">Fewer Oracle-specific migration tools. Delta migration from Oracle requires more custom engineering.</div>
+    <div class="sc-winner"><span class="winner-badge sf">SF</span></div>
+  </div>
+
+  <div class="sc-row">
+    <div class="sc-criterion">Marketplace / Partner Ecosystem <span class="weight">LOW</span></div>
+    <div class="sc-cell tie">Snowflake Marketplace — data sharing, third-party datasets. Strong for financial data vendors.</div>
+    <div class="sc-cell tie">Databricks Marketplace growing but smaller. Both have strong partner ecosystems for banking.</div>
+    <div class="sc-winner"><span class="winner-badge tie">TIE</span></div>
+  </div>
+
+</div>
+
+<!-- Bottom cards -->
+<div class="bottom-grid">
+  <div class="bottom-card sf-card">
+    <h3>❄ Snowflake — Choose When</h3>
+    <ul>
+      <li>Primary workload is structured relational data from Oracle</li>
+      <li>Team is SQL-first — no Spark expertise or appetite to build it</li>
+      <li>NYDFS audit trail and data residency are non-negotiable</li>
+      <li>SEI SWP is already on Snowflake — align to existing platform</li>
+      <li>Need zero infrastructure management — banking IT ops is lean</li>
+      <li>dbt is the transformation standard — best adapter is Snowflake</li>
+      <li>Cost predictability matters for budget governance</li>
+    </ul>
+  </div>
+  <div class="bottom-card db-card">
+    <h3>⚡ Databricks — Choose When</h3>
+    <ul>
+      <li>BBH invests seriously in ML/AI — model training on client data</li>
+      <li>Unstructured data processing becomes a core use case (PDFs, emails)</li>
+      <li>You need a unified platform for both data engineering AND data science</li>
+      <li>Streaming / real-time event processing becomes a requirement</li>
+      <li>BBH builds its own AI models vs consuming models from vendors</li>
+      <li>Long-term — pair with Snowflake, don't replace it</li>
+    </ul>
+  </div>
+</div>
+
+<!-- Final verdict -->
+<div class="verdict-final">
+  <div class="verdict-score-big">
+    <span>VERDICT</span>
+    Snowflake<br>Clear Win
+  </div>
+  <div class="verdict-text">
+    For a <strong>legacy bank migrating from Oracle with structured relational data, NYDFS regulatory requirements, and a SQL-first engineering team</strong> — Snowflake wins on every dimension that matters today. The SEI SWP program already runs on Snowflake, making it the path of zero friction. Databricks is not a bad product — it is the wrong product for this specific context and maturity stage. <strong>The right long-term answer is not Snowflake vs Databricks — it is Snowflake as the warehouse layer with Databricks introduced later as the AI/ML layer</strong> when BBH's data science capability matures, running against the same Delta-compatible storage if needed.
+  </div>
+</div>
+
+</body>
+</html>
