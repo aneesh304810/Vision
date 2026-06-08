@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Databricks Platform Interrogation Framework</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+
+  :root {
+    --bg: #0a0d14;
+    --surface: #111520;
+    --surface2: #161c2e;
+    --border: #1e2840;
+    --accent: #00c9a7;
+    --accent2: #ff6b35;
+    --accent3: #7b93ff;
+    --warn: #ffd166;
+    --danger: #ef476f;
+    --text: #c8d6e5;
+    --text-dim: #5a6a82;
+    --text-bright: #eaf0fb;
+    --mono: 'IBM Plex Mono', monospace;
+    --sans: 'IBM Plex Sans', sans-serif;
+    --serif: 'Playfair Display', serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* HEADER */
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 48px 60px 36px;
+    position: relative;
+    overflow: hidden;
+  }
+  header::before {
+    content: '';
+    position: absolute;
+    top: -80px; right: -80px;
+    width: 400px; height: 400px;
+    background: radial-gradient(circle, rgba(0,201,167,0.08) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .tag {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    color: var(--accent);
+    text-transform: uppercase;
+    margin-bottom: 16px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .tag::before { content: ''; width: 24px; height: 1px; background: var(--accent); }
+  h1 {
+    font-family: var(--serif);
+    font-size: clamp(28px, 4vw, 48px);
+    font-weight: 900;
+    color: var(--text-bright);
+    line-height: 1.1;
+    max-width: 700px;
+    margin-bottom: 16px;
+  }
+  h1 span { color: var(--accent2); }
+  .subtitle {
+    font-size: 14px;
+    color: var(--text-dim);
+    font-family: var(--mono);
+    max-width: 600px;
+  }
+  .context-bar {
+    display: flex; gap: 24px; flex-wrap: wrap;
+    margin-top: 28px;
+  }
+  .ctx-chip {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 5px 12px;
+    border-radius: 2px;
+    border: 1px solid;
+  }
+  .ctx-chip.oracle { border-color: var(--warn); color: var(--warn); background: rgba(255,209,102,0.06); }
+  .ctx-chip.consumers { border-color: var(--danger); color: var(--danger); background: rgba(239,71,111,0.06); }
+  .ctx-chip.model { border-color: var(--accent3); color: var(--accent3); background: rgba(123,147,255,0.06); }
+
+  /* LAYOUT */
+  main { padding: 48px 60px; max-width: 1400px; }
+
+  /* SECTION LABEL */
+  .section-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 24px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .section-num { color: var(--accent); }
+
+  /* VERDICT BOX */
+  .verdict-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent2);
+    padding: 24px 28px;
+    margin-bottom: 48px;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 20px;
+    align-items: start;
+  }
+  .verdict-icon { font-size: 32px; }
+  .verdict-box h2 {
+    font-family: var(--serif);
+    font-size: 20px;
+    color: var(--text-bright);
+    margin-bottom: 8px;
+  }
+  .verdict-box p { font-size: 13px; color: var(--text); line-height: 1.7; }
+
+  /* QUESTION GRID */
+  .question-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+    gap: 2px;
+    margin-bottom: 48px;
+  }
+
+  .q-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 24px;
+    position: relative;
+    transition: border-color 0.2s;
+    cursor: default;
+  }
+  .q-card:hover { border-color: var(--accent); }
+
+  .q-card.critical { border-top: 2px solid var(--danger); }
+  .q-card.high { border-top: 2px solid var(--warn); }
+  .q-card.strategic { border-top: 2px solid var(--accent); }
+
+  .q-meta {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 12px;
+  }
+  .q-num {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    min-width: 28px;
+  }
+  .q-badge {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 1px;
+  }
+  .badge-critical { background: rgba(239,71,111,0.15); color: var(--danger); }
+  .badge-high { background: rgba(255,209,102,0.12); color: var(--warn); }
+  .badge-strategic { background: rgba(0,201,167,0.1); color: var(--accent); }
+
+  .q-domain {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-left: auto;
+  }
+
+  .q-card h3 {
+    font-family: var(--sans);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 10px;
+    line-height: 1.4;
+  }
+  .q-card p {
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+  .q-card .trap {
+    margin-top: 12px;
+    padding: 8px 10px;
+    background: rgba(239,71,111,0.06);
+    border-left: 2px solid var(--danger);
+    font-size: 11px;
+    font-family: var(--mono);
+    color: #c97a8a;
+    line-height: 1.5;
+  }
+  .trap-label { color: var(--danger); font-weight: 500; }
+
+  /* FULL WIDTH CARD */
+  .q-card.wide {
+    grid-column: 1 / -1;
+  }
+  .q-card.wide .sub-questions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+    margin-top: 14px;
+  }
+  .sub-q {
+    background: var(--surface2);
+    padding: 10px 12px;
+    font-size: 12px;
+    color: var(--text);
+    border-left: 2px solid var(--border);
+    font-family: var(--mono);
+  }
+  .sub-q::before { content: '↳ '; color: var(--accent3); }
+
+  /* DECISION MATRIX */
+  .matrix-section { margin-bottom: 48px; }
+  .matrix-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  .matrix-table th {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    text-align: left;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface2);
+  }
+  .matrix-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    color: var(--text);
+    background: var(--surface);
+  }
+  .matrix-table tr:hover td { background: var(--surface2); }
+  .matrix-table td:first-child {
+    font-weight: 600;
+    color: var(--text-bright);
+    font-size: 13px;
+    white-space: nowrap;
+  }
+  .score-cell {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .score-high { color: var(--danger); }
+  .score-med { color: var(--warn); }
+  .score-low { color: var(--accent); }
+
+  /* KILLER QUESTIONS */
+  .killer-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-top: 3px solid var(--danger);
+    padding: 32px;
+    margin-bottom: 48px;
+  }
+  .killer-section h2 {
+    font-family: var(--serif);
+    font-size: 22px;
+    color: var(--text-bright);
+    margin-bottom: 8px;
+  }
+  .killer-section .sub { font-size: 12px; color: var(--text-dim); margin-bottom: 24px; font-family: var(--mono); }
+  .killer-list { display: flex; flex-direction: column; gap: 12px; }
+  .killer-item {
+    display: grid;
+    grid-template-columns: 28px 1fr auto;
+    gap: 14px;
+    align-items: start;
+    padding: 14px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+  }
+  .killer-num {
+    font-family: var(--mono);
+    font-size: 18px;
+    font-weight: 500;
+    color: var(--danger);
+    line-height: 1;
+    margin-top: 2px;
+  }
+  .killer-item h4 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 4px;
+  }
+  .killer-item p { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+  .killer-stake {
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 3px 8px;
+    white-space: nowrap;
+    align-self: start;
+  }
+  .stake-cost { background: rgba(239,71,111,0.1); color: var(--danger); }
+  .stake-risk { background: rgba(255,209,102,0.1); color: var(--warn); }
+  .stake-time { background: rgba(123,147,255,0.1); color: var(--accent3); }
+
+  /* ALTERNATIVES */
+  .alt-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 2px;
+    margin-bottom: 48px;
+  }
+  .alt-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 24px;
+  }
+  .alt-card h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 6px;
+  }
+  .alt-card .fit { font-family: var(--mono); font-size: 10px; color: var(--accent); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 10px; }
+  .alt-card ul { padding-left: 16px; font-size: 12px; color: var(--text-dim); line-height: 1.8; }
+
+  /* NEGOTIATION POSTURE */
+  .posture-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent3);
+    padding: 28px;
+    margin-bottom: 48px;
+  }
+  .posture-box h2 {
+    font-family: var(--serif);
+    font-size: 20px;
+    color: var(--text-bright);
+    margin-bottom: 16px;
+  }
+  .posture-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .posture-item { font-size: 12px; }
+  .posture-item strong { color: var(--accent3); display: block; margin-bottom: 4px; font-family: var(--mono); font-size: 11px; text-transform: uppercase; }
+
+  /* FOOTER */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 24px 60px;
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 12px;
+  }
+  footer .f-left { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+  footer .f-right { font-family: var(--mono); font-size: 10px; color: var(--text-dim); }
+
+  @media (max-width: 700px) {
+    header, main, footer { padding: 28px 20px; }
+    .posture-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="tag">Platform Evaluation · Strategic Interrogation</div>
+  <h1>Before You Say Yes to <span>Databricks</span></h1>
+  <p class="subtitle">// 30 questions your counterpart must answer before this becomes a platform decision</p>
+  <div class="context-bar">
+    <div class="ctx-chip oracle">Legacy Oracle DWH</div>
+    <div class="ctx-chip consumers">1,000+ P2P Consumers</div>
+    <div class="ctx-chip model">Non-Agnostic Data Model</div>
+  </div>
+</header>
+
+<main>
+
+  <!-- VERDICT -->
+  <div class="verdict-box">
+    <div class="verdict-icon">⚠️</div>
+    <div>
+      <h2>The Silver Bullet Fallacy — Your Counterpart's Blind Spots</h2>
+      <p>Databricks is a powerful platform for ML/AI-heavy, schema-on-read, large-scale analytics workloads. It is <strong style="color: var(--text-bright)">not</strong> a drop-in replacement for a regulated SQL-native data warehouse with 1,000 point-to-point consumer contracts, tight governance requirements, and a non-agnostic Oracle schema. Every question below surfaces a specific risk your counterpart's proposal has likely glossed over. Use them to force a real architecture conversation — not a vendor pitch.</p>
+    </div>
+  </div>
+
+  <!-- DOMAIN 1: CONSUMER IMPACT -->
+  <div class="section-label"><span>Domain 01</span><span class="section-num">Consumer Migration Risk</span></div>
+  <div class="question-grid">
+
+    <div class="q-card critical">
+      <div class="q-meta">
+        <span class="q-num">Q01</span>
+        <span class="q-badge badge-critical">Critical</span>
+        <span class="q-domain">Consumers</span>
+      </div>
+      <h3>How do we migrate 1,000 point-to-point consumers without a multi-year service disruption?</h3>
+      <p>Each consumer has an implicit or explicit contract with the Oracle schema. Databricks changes the query interface, auth model, and connection protocol. What is the strangler fig plan? Who funds each consumer's re-plumbing?</p>
+      <div class="trap"><span class="trap-label">Trap answer: </span>"We'll provide a JDBC connector." JDBC over Databricks SQL is not the same latency, auth, or transaction model as Oracle. 1,000 consumers will hit 1,000 edge cases.</div>
+    </div>
+
+    <div class="q-card critical">
+      <div class="q-meta">
+        <span class="q-num">Q02</span>
+        <span class="q-badge badge-critical">Critical</span>
+        <span class="q-domain">Consumers</span>
+      </div>
+      <h3>Who owns the consumer migration program — and what is the estimated T-shirt sizing?</h3>
+      <p>Consumer rewrites are almost always underestimated. Have they produced a consumer inventory? A risk-tiered consumer classification? Budget and headcount for migration squads? Or is this "the consumers' problem"?</p>
+      <div class="trap"><span class="trap-label">Trap answer: </span>"Consumers adapt to the new API." That's a programme with no owner and no budget — ask them to show the RAID log.</div>
+    </div>
+
+    <div class="q-card high">
+      <div class="q-meta">
+        <span class="q-num">Q03</span>
+        <span class="q-badge badge-high">High</span>
+        <span class="q-domain">Consumers</span>
+      </div>
+      <h3>What SLA commitments exist on current consumer interfaces — and can Databricks match them contractually?</h3>
+      <p>Oracle DWH with dedicated connections offers deterministic latency profiles. Databricks SQL Serverless has cold-start behavior and shared compute pools. Are current SLAs documented? What happens when you breach them?</p>
+    </div>
+
+    <div class="q-card high">
+      <div class="q-meta">
+        <span class="q-num">Q04</span>
+        <span class="q-badge badge-high">High</span>
+        <span class="q-domain">Consumers</span>
+      </div>
+      <h3>Which consumers run intraday batch windows with sub-30-minute SLAs?</h3>
+      <p>Financial services DWH often has critical intraday windows (NAV, ABOR, position runs). Databricks job scheduling and cluster spin-up times must be benchmarked against these — not just quoted from a marketing sheet.</p>
+    </div>
+
+  </div>
+
+  <!-- DOMAIN 2: DATA MODEL -->
+  <div class="section-label"><span>Domain 02</span><span class="section-num">Data Model & Schema Complexity</span></div>
+  <div class="question-grid">
+
+    <div class="q-card critical">
+      <div class="q-meta">
+        <span class="q-num">Q05</span>
+        <span class="q-badge badge-critical">Critical</span>
+        <span class="q-domain">Data Model</span>
+      </div>
+      <h3>How does a non-agnostic Oracle schema translate to Delta Lake — and who owns the semantic layer rebuild?</h3>
+      <p>Non-agnostic means Oracle-specific constructs: PL/SQL packages, materialized views, DB links, sequences, and type hierarchies. Delta Lake has none of these natively. The semantic layer must be re-expressed in Spark SQL or dbt. What is the LOE estimate?</p>
+      <div class="trap"><span class="trap-label">Trap answer: </span>"We'll use sqlglot to auto-translate." Auto-translation handles syntax, not semantics. Business logic embedded in PL/SQL procedures will not survive automated conversion.</div>
+    </div>
+
+    <div class="q-card high">
+      <div class="q-meta">
+        <span class="q-num">Q06</span>
+        <span class="q-badge badge-high">High</span>
+        <span class="q-domain">Data Model</span>
+      </div>
+      <h3>Do we have SCD Type 2 / bi-temporal patterns in the current model — and how does Delta handle them?</h3>
+      <p>Delta Lake MERGE is possible but not native SCD Type 2 tooling. dbt-databricks can help, but the existing Oracle temporal logic must be inventoried, validated, and re-expressed. Has anyone done a pattern audit?</p>
+    </div>
+
+    <div class="q-card high">
+      <div class="q-meta">
+        <span class="q-num">Q07</span>
+        <span class="q-badge badge-high">High</span>
+        <span class="q-domain">Data Model</span>
+      </div>
+      <h3>What Oracle-specific optimizations are load-bearing — partition pruning, index strategies, table compression?</h3>
+      <p>Legacy DWH performance often depends on Oracle-native constructs (partition elimination, bitmap indexes, Hybrid Columnar Compression). These have no direct Delta equivalent. Performance benchmarks must precede the platform decision.</p>
+    </div>
+
+    <div class="q-card strategic">
+      <div class="q-meta">
+        <span class="q-num">Q08</span>
+        <span class="q-badge badge-strategic">Strategic</span>
+        <span class="q-domain">Data Model</span>
+      </div>
+      <h3>Is the goal to lift-and-shift, or to redesign the data model for a lakehouse paradigm?</h3>
+      <p>These are radically different projects. Lift-and-shift reproduces legacy problems on new infrastructure. True lakehouse redesign is a multi-year transformation. Which is being proposed — and is leadership aligned on the scope?</p>
+    </div>
+
+  </div>
+
+  <!-- DOMAIN 3: COMPLIANCE & GOVERNANCE -->
+  <div class="section-label"><span>Domain 03</span><span class="section-num">Regulatory & Governance</span></div>
+  <div class="question-grid">
+
+    <div class="q-card critical">
+      <div class="q-meta">
+        <span class="q-num">Q09</span>
+        <span class="q-badge badge-critical">Critical</span>
+        <span class="q-domain">Compliance</span>
+      </div>
+      <h3>Has Legal & Compliance reviewed data residency and sovereignty implications of Databricks on Azure/AWS?</h3>
+      <p>Your current data lives on-prem or in a controlled environment. Databricks is a cloud-native platform. NYDFS, SEC, and internal data residency policies may require specific region controls, audit logging, and sovereign key management. Has DPO signoff been obtained?</p>
+      <div class="trap"><span class="trap-label">Trap answer: </span>"Databricks is SOC 2 certified." SOC 2 is table stakes. The question is whether YOUR data residency policy allows cloud egress at all.</div>
+    </div>
+
+    <div class="q-card critical">
+      <div class="q-meta">
+        <span class="q-num">Q10</span>
+        <span class="q-badge badge-critical">Critical</span>
+        <span class="q-domain">Compliance</span>
+      </div>
+      <h3>How does Unity Catalog compare to our current Oracle VPD / row-level security model?</h3>
+      <p>Oracle Virtual Private Database (VPD) enforces fine-grained row-level security at the kernel layer — invisible to consumers. Unity Catalog provides column/row filters but through a different enforcement model. A gap analysis is mandatory before any consumer is migrated.</p>
+    </div>
+
+    <div class="q-card high">
+      <div class="q-meta">
+        <span class="q-num">Q11</span>
+        <span class="q-badge badge-high">High</span>
+        <span class="q-domain">Compliance</span>
+      </div>
+      <h3>What is the audit trail model — and can Databricks match Oracle's native audit policies for NYDFS/SEC reporting?</h3>
+      <p>Regulated DWH environments require immutable audit trails with data access logs at the statement level. Databricks audit logs go to cloud storage — which is a different retention, query, and attestation model than Oracle Unified Auditing.</p>
+    </div>
+
+    <div class="q-card high">
+      <div class="q-meta">
+        <span class="q-num">Q12</span>
+        <span class="q-badge badge-high">High</span>
+        <span class="q-domain">Compliance</span>
+      </div>
+      <h3>What is the data lineage strategy — and has it been validated by Compliance?</h3>
+      <p>Financial regulators increasingly require end-to-end data lineage for critical calculations. Databricks + Unity Catalog provides some lineage, but integration with a governance layer (OpenMetadata, Alation, Collibra) requires design. Who owns this?</p>
+    </div>
+
+  </div>
+
+  <!-- DOMAIN 4: COST -->
+  <div class="section-label"><span>Domain 04</span><span class="section-num">Total Cost of Ownership</span></div>
+  <div class="question-grid">
+
+    <div class="q-card critical">
+      <div class="q-card-inner">
+      <div class="q-meta">
+        <span class="q-num">Q13</span>
+        <span class="q-badge badge-critical">Critical</span>
+        <span class="q-domain">Cost</span>
+      </div>
+      <h3>What is the full 5-year TCO — including migration labor, consumer re-plumbing, training, and cloud egress?</h3>
+      <p>Databricks DBU pricing is opaque and usage-sensitive. With 1,000 consumers generating constant query load, DBU burn can be severe. Has anyone modeled: DBU cost at current DWH query volume × 1,000 consumers? Plus migration + training + support? This number is almost certainly larger than the current Oracle license.</p>
+      <div class="trap"><span class="trap-label">Trap answer: </span>"We'll save money vs. Oracle license costs." Oracle license cost is one line item. Ask for a full TCO model, not a license comparison.</div>
+    </div>
+    </div>
+
+    <div class="q-card high">
+      <div class="q-meta">
+        <span class="q-num">Q14</span>
+        <span class="q-badge badge-high">High</span>
+        <span class="q-domain">Cost</span>
+      </div>
+      <h3>Have we modeled Databricks DBU consumption at current Oracle AWR workload levels?</h3>
+      <p>Take your Oracle AWR report — total logical reads, concurrent sessions, peak query hours — and translate to equivalent Databricks SQL Pro/Serverless DBU consumption. This is the real cost baseline. Has anyone done this exercise?</p>
+    </div>
+
+    <div class="q-card high">
+      <div class="q-meta">
+        <span class="q-num">Q15</span>
+        <span class="q-badge badge-high">High</span>
+        <span class="q-domain">Cost</span>
+      </div>
+      <h3>What are the cloud egress costs when 1,000 consumers pull data cross-region or cross-cloud?</h3>
+      <p>Data egress from cloud platforms is not free. 1,000 consumers hitting a Databricks endpoint frequently can generate substantial egress bills — costs that don't exist in an on-prem Oracle DWH. Has networking cost been modeled?</p>
+    </div>
+
+    <div class="q-card strategic">
+      <div class="q-meta">
+        <span class="q-num">Q16</span>
+        <span class="q-badge badge-strategic">Strategic</span>
+        <span class="q-domain">Cost</span>
+      </div>
+      <h3>What is the cost of doing nothing — i.e., Oracle Extended Support — vs. the migration investment?</h3>
+      <p>Oracle Extended Support is expensive but finite and predictable. Migration risk is large and probabilistic. A proper decision requires both numbers. If Oracle Extended Support is $X and migration is $5X with a 3-year payback, the risk-adjusted decision may differ from the pitch.</p>
+    </div>
+
+  </div>
+
+  <!-- DOMAIN 5: ARCHITECTURE FIT -->
+  <div class="section-label"><span>Domain 05</span><span class="section-num">Architecture & Operational Fit</span></div>
+  <div class="question-grid">
+
+    <div class="q-card critical">
+      <div class="q-meta">
+        <span class="q-num">Q17</span>
+        <span class="q-badge badge-critical">Critical</span>
+        <span class="q-domain">Architecture</span>
+      </div>
+      <h3>Does Databricks serve high-concurrency, low-latency SQL reads as well as Oracle — or is this an analytics-first platform?</h3>
+      <p>Databricks excels at large-scale batch analytics and ML. For 1,000 concurrent SQL consumers expecting sub-second response on indexed lookups, you need Databricks SQL Pro with sufficient cluster size — which is expensive and architecturally different from Oracle's always-on model.</p>
+      <div class="trap"><span class="trap-label">Trap answer: </span>"Databricks SQL is just like a data warehouse." Run a concurrent load test at 1,000 sessions with your actual query patterns first.</div>
+    </div>
+
+    <div class="q-card critical">
+      <div class="q-meta">
+        <span class="q-num">Q18</span>
+        <span class="q-badge badge-critical">Critical</span>
+        <span class="q-domain">Architecture</span>
+      </div>
+      <h3>What is the operational model — who runs Databricks clusters, manages upgrades, and handles incidents at 2 AM?</h3>
+      <p>Oracle DBA skills do not transfer to Databricks cluster ops, Photon engine tuning, or Unity Catalog administration. Does the team exist? What is the hiring/training plan? What is the managed service vs. self-hosted decision?</p>
+    </div>
+
+    <div class="q-card high">
+      <div class="q-meta">
+        <span class="q-num">Q19</span>
+        <span class="q-badge badge-high">High</span>
+        <span class="q-domain">Architecture</span>
+      </div>
+      <h3>How does the Airflow/dbt orchestration layer integrate with Databricks — and what changes?</h3>
+      <p>If you're already running Airflow + dbt-core, dbt-databricks is a supported adapter. But Databricks workflows, cluster management, and job scheduling create a parallel orchestration surface. Decide: Databricks Workflows or Airflow — not both.</p>
+    </div>
+
+    <div class="q-card high">
+      <div class="q-meta">
+        <span class="q-num">Q20</span>
+        <span class="q-badge badge-high">High</span>
+        <span class="q-domain">Architecture</span>
+      </div>
+      <h3>Is this a full replacement or a coexistence architecture — and if coexistence, what is the sync model?</h3>
+      <p>Many "Databricks migrations" end as dual-platform architectures — Oracle for OLTP/critical consumers, Databricks for analytics. If that's the real outcome, the business case changes fundamentally. Force the coexistence scenario onto the table early.</p>
+    </div>
+
+    <div class="q-card strategic">
+      <div class="q-meta">
+        <span class="q-num">Q21</span>
+        <span class="q-badge badge-strategic">Strategic</span>
+        <span class="q-domain">Architecture</span>
+      </div>
+      <h3>Does this conflict with the SEI SWP platform, which is already the designated source of record?</h3>
+      <p>If SEI SWP is already designated as source of record for the SWP migration, where does Databricks fit in the data flow? Is it replacing the downstream warehouse, augmenting it, or creating a competing source of truth? This needs an explicit architectural position paper.</p>
+    </div>
+
+    <div class="q-card strategic">
+      <div class="q-meta">
+        <span class="q-num">Q22</span>
+        <span class="q-badge badge-strategic">Strategic</span>
+        <span class="q-domain">Architecture</span>
+      </div>
+      <h3>What is the vendor lock-in profile of Delta Lake vs. open table formats (Iceberg, Apache Hudi)?</h3>
+      <p>Delta Lake is open source but the Databricks implementation has proprietary extensions (Deletion Vectors, Liquid Clustering, Predictive I/O). Are you comfortable with that lock-in vector? Have alternatives on open Iceberg been evaluated?</p>
+    </div>
+
+  </div>
+
+  <!-- DOMAIN 6: STRATEGIC / POLITICAL -->
+  <div class="section-label"><span>Domain 06</span><span class="section-num">Strategic & Organizational</span></div>
+  <div class="question-grid">
+
+    <div class="q-card strategic wide">
+      <div class="q-meta">
+        <span class="q-num">Q23–28</span>
+        <span class="q-badge badge-strategic">Strategic</span>
+        <span class="q-domain">Organization</span>
+      </div>
+      <h3>Organizational readiness questions that must be answered before platform selection:</h3>
+      <div class="sub-questions">
+        <div class="sub-q">Who is the executive sponsor and what is their authority to fund a 3-year migration?</div>
+        <div class="sub-q">Is this Databricks preference driven by a skills agenda, vendor relationship, or genuine architecture need?</div>
+        <div class="sub-q">Has the Board / ARB been briefed on the risk profile of migrating 1,000 consumers simultaneously?</div>
+        <div class="sub-q">What happens to the existing Oracle DBAs — and is skills transition budgeted?</div>
+        <div class="sub-q">Is there a fallback plan if the migration stalls at year 2 with 400 consumers still on Oracle?</div>
+        <div class="sub-q">How does this proposal interact with ongoing SWP migration commitments and timelines?</div>
+      </div>
+    </div>
+
+    <div class="q-card strategic">
+      <div class="q-meta">
+        <span class="q-num">Q29</span>
+        <span class="q-badge badge-strategic">Strategic</span>
+        <span class="q-domain">Strategy</span>
+      </div>
+      <h3>What problem, specifically, does Databricks solve that cannot be addressed by modernizing the Oracle estate?</h3>
+      <p>Oracle Autonomous Data Warehouse, Exadata, or a dbt-core medallion layer on Oracle can address many modernization needs without migration risk. Has the "Oracle modernization" path been formally evaluated and rejected — with documented rationale?</p>
+    </div>
+
+    <div class="q-card strategic">
+      <div class="q-meta">
+        <span class="q-num">Q30</span>
+        <span class="q-badge badge-strategic">Strategic</span>
+        <span class="q-domain">Strategy</span>
+      </div>
+      <h3>What does the phased delivery look like — and what is the measurable success criteria at each gate?</h3>
+      <p>A credible platform proposal includes Phase 0 (POC with representative workloads), Phase 1 (pilot consumers), and clear go/no-go criteria. If the proposal jumps straight to "full migration," it is not an architecture plan — it is a vendor pitch.</p>
+    </div>
+
+  </div>
+
+  <!-- KILLER QUESTIONS -->
+  <div class="killer-section">
+    <h2>The 5 Killer Questions — Ask These First</h2>
+    <p class="sub">// If your counterpart cannot answer these with specifics, the proposal is not ready for an architecture decision</p>
+    <div class="killer-list">
+
+      <div class="killer-item">
+        <div class="killer-num">1</div>
+        <div>
+          <h4>Show me the consumer inventory and migration sequencing plan.</h4>
+          <p>1,000 consumers migrating to a new platform is a multi-year program. If there's no inventory, there's no plan — only aspiration. Ask for the spreadsheet.</p>
+        </div>
+        <div class="killer-stake stake-time">Timeline Risk</div>
+      </div>
+
+      <div class="killer-item">
+        <div class="killer-num">2</div>
+        <div>
+          <h4>Show me the 5-year TCO model including migration labor and consumer re-plumbing costs.</h4>
+          <p>The proposal must include a full cost model — not just DBU vs. Oracle license. If they can't show the full cost, the business case doesn't exist yet.</p>
+        </div>
+        <div class="killer-stake stake-cost">Cost Risk</div>
+      </div>
+
+      <div class="killer-item">
+        <div class="killer-num">3</div>
+        <div>
+          <h4>Show me the concurrency benchmark at 1,000 sessions against our actual query patterns.</h4>
+          <p>Databricks SQL performance claims are based on TPC-DS benchmarks, not your workload. Run a real POC with your top 20 query patterns at 1,000 concurrent sessions before any decision.</p>
+        </div>
+        <div class="killer-stake stake-risk">Performance Risk</div>
+      </div>
+
+      <div class="killer-item">
+        <div class="killer-num">4</div>
+        <div>
+          <h4>Has Legal signed off on cloud data residency and NYDFS implications?</h4>
+          <p>If this is a regulated environment, compliance is a gate — not a discussion. No legal sign-off means the project cannot proceed regardless of technical merit.</p>
+        </div>
+        <div class="killer-stake stake-risk">Compliance Risk</div>
+      </div>
+
+      <div class="killer-item">
+        <div class="killer-num">5</div>
+        <div>
+          <h4>What is the rollback plan if Databricks fails to meet SLAs after 200 consumers are migrated?</h4>
+          <p>Every migration has a risk of stalling mid-flight. A dual-platform hybrid state is the most expensive outcome. Ask for the explicit rollback and coexistence strategy.</p>
+        </div>
+        <div class="killer-stake stake-cost">Exit Risk</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ALTERNATIVES -->
+  <div class="section-label"><span>Context</span><span class="section-num">Alternatives to Put on the Table</span></div>
+  <div class="alt-grid">
+    <div class="alt-card">
+      <h3>Oracle ADW / Exadata</h3>
+      <div class="fit">Best fit: SQL-native, compliance-heavy</div>
+      <ul>
+        <li>Zero consumer migration risk</li>
+        <li>Native PL/SQL + existing skills</li>
+        <li>Autonomous tuning reduces DBA overhead</li>
+        <li>Cloud or Exadata on-prem options</li>
+      </ul>
+    </div>
+    <div class="alt-card">
+      <h3>Snowflake</h3>
+      <div class="fit">Best fit: SQL-native, high-concurrency</div>
+      <ul>
+        <li>Deterministic per-query pricing</li>
+        <li>Near-zero cold-start for SQL consumers</li>
+        <li>Strong governance via row access policies</li>
+        <li>Better fit for 1,000 SQL consumers than Databricks</li>
+      </ul>
+    </div>
+    <div class="alt-card">
+      <h3>Oracle + dbt Medallion Layer</h3>
+      <div class="fit">Best fit: Modernize without migration</div>
+      <ul>
+        <li>Keep Oracle as compute substrate</li>
+        <li>Rebuild semantic layer in dbt-oracle</li>
+        <li>No consumer migration risk</li>
+        <li>Incremental, reversible transformation</li>
+      </ul>
+    </div>
+    <div class="alt-card">
+      <h3>Hybrid: Oracle + Databricks</h3>
+      <div class="fit">Best fit: ML/AI use cases only</div>
+      <ul>
+        <li>Databricks for ML, feature engineering, AI</li>
+        <li>Oracle remains consumer-facing DWH</li>
+        <li>Limits migration risk to new workloads</li>
+        <li>Avoids consumer contract disruption</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- NEGOTIATION POSTURE -->
+  <div class="posture-box">
+    <h2>Your Negotiation Posture Going Into the Meeting</h2>
+    <div class="posture-grid">
+      <div class="posture-item">
+        <strong>Your Opening Position</strong>
+        "We're open to Databricks for specific workloads where it is the strongest fit — particularly ML/AI and large-scale analytics. We are not open to a full DWH replacement without a funded consumer migration program, compliance sign-off, and a validated TCO model."
+      </div>
+      <div class="posture-item">
+        <strong>What You Want From This Meeting</strong>
+        A commitment to a formal Platform Evaluation phase: 60-day POC with representative workloads, consumer inventory, TCO model, compliance assessment, and go/no-go criteria before any architecture decision is made.
+      </div>
+      <div class="posture-item">
+        <strong>What You Must Block</strong>
+        Any decision to "commit to Databricks as the platform" before the above deliverables exist. A platform commitment without a migration plan is just a vendor contract with no exit.
+      </div>
+      <div class="posture-item">
+        <strong>What You Can Concede</strong>
+        A funded 60-day POC on a bounded scope — e.g., 2–3 analytics use cases, 5 non-critical consumers, with a formal evaluation scorecard. This is not a platform decision; it is evidence gathering.
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<footer>
+  <div class="f-left">Platform Evaluation Framework · Data Architecture</div>
+  <div class="f-right">30 Questions · 5 Domains · 1 Decision Gate</div>
+</footer>
+
+</body>
+</html>
