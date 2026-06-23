@@ -1,0 +1,579 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CP Catalog — BBH Mockup</title>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#f5f8f8; --panel:#fff; --panel2:#dfe6e9; --border:#b5b6b6;
+    --text:#333; --sub:#666; --muted:#999; --navy:#10193b; --accent:#0f4775;
+    --mutedc:#5f87a7; --tint:#cae3ee; --pop:#31bced; --hover:#0091bf; --hoverbg:#eee;
+    --disabled:#dbdae0; --success:#159943; --successbg:#d0ebd9;
+    --danger:#c1113a; --dangerbg:#f3d2d7; --warning:#e67e22; --warningbg:#fae5d3;
+    --info:#0091bf; --infobg:#e0f5fd;
+    --modInterface:#10193b; --modApi:#0091bf; --modData:#0f4775; --modDatapoint:#159943;
+    /* project palette */
+    --projSei:#0091bf; --projBloomberg:#000; --projPivotal:#7c3aed;
+    --projAddvantage:#ea580c; --projCharlesRiver:#2563eb; --projInternal:#0f4775; --projOther:#999;
+    --catSei:#0091bf; --catNonSei:#5f87a7;
+    --piiClient:#c1113a; --piiAccount:#e67e22; --piiAsset:#0091bf; --piiNone:#999;
+    --bronze:#b45309; --silver:#64748b; --gold:#ca8a04;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:Roboto,'Helvetica Neue',Arial,sans-serif;font-size:14px;line-height:1.5;
+    min-width:1263px}
+  a{color:var(--accent);text-decoration:none}
+
+  /* ---- header ---- */
+  header.bbh{height:56px;background:var(--navy);display:flex;align-items:center;
+    padding:0 30px;gap:24px;color:#fff}
+  header.bbh .logo{font-weight:700;font-size:16px;letter-spacing:.3px;display:flex;align-items:center;gap:10px}
+  header.bbh .logo .sq{width:28px;height:28px;background:var(--pop);border-radius:3px;
+    display:grid;place-items:center;color:var(--navy);font-weight:700;font-size:13px}
+  header.bbh nav{display:flex;gap:4px;margin-left:10px}
+  header.bbh nav button{background:none;border:none;color:#b8c4d6;font-family:inherit;
+    font-size:14px;font-weight:500;padding:8px 14px;border-radius:2px;cursor:pointer;transition:.25s ease-out}
+  header.bbh nav button:hover{color:#fff;background:rgba(255,255,255,.08)}
+  header.bbh nav button.active{color:#fff;background:var(--accent)}
+  header.bbh .right{margin-left:auto;display:flex;align-items:center;gap:14px;font-size:12px;color:#b8c4d6}
+  .livedot{width:8px;height:8px;border-radius:50%;background:var(--success);display:inline-block;margin-right:5px}
+
+  /* ---- layout ---- */
+  main{padding:30px 40px 60px;max-width:1500px;margin:0 auto}
+  .sectionhead{font-size:24px;font-weight:500;color:var(--accent);
+    border-bottom:2px solid var(--accent);padding-bottom:14px;margin:0 0 24px;
+    display:flex;align-items:center;gap:12px}
+  .sectionhead .sub{font-size:13px;color:var(--sub);font-weight:400;margin-left:auto}
+
+  .screen{display:none}
+  .screen.active{display:block}
+
+  /* ---- KPI strip ---- */
+  .kpis{display:flex;gap:15px;margin-bottom:24px;flex-wrap:wrap}
+  .kpi{background:var(--panel);border:1px solid var(--disabled);border-radius:3px;
+    padding:16px 20px;min-width:140px;flex:1}
+  .kpi .n{font-size:28px;font-weight:700;color:var(--navy);line-height:1}
+  .kpi .l{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;
+    color:var(--muted);margin-top:6px}
+  .kpi.warn .n{color:var(--warning)}
+  .kpi.pii .n{color:var(--danger)}
+  .kpi.sei .n{color:var(--projSei)}
+
+  /* ---- cards ---- */
+  .card{background:var(--panel);border:1px solid var(--disabled);border-radius:3px;padding:20px;margin-bottom:20px}
+  .grid{display:grid;gap:20px}
+  .grid.c4{grid-template-columns:repeat(4,1fr)}
+  .grid.c2{grid-template-columns:1fr 1fr}
+  .grid.c3{grid-template-columns:repeat(3,1fr)}
+
+  /* ---- project switcher ---- */
+  .projsw{display:flex;align-items:center;gap:10px;background:var(--panel);
+    border:1px solid var(--disabled);border-radius:3px;padding:10px 14px;margin-bottom:20px}
+  .projtab{display:inline-flex;align-items:center;gap:7px;border:none;cursor:pointer;
+    font-family:inherit;font-size:13px;font-weight:500;padding:7px 14px;border-radius:2px;
+    background:var(--disabled);color:var(--sub);transition:.25s ease-out}
+  .projtab:hover{background:var(--hoverbg);color:var(--hover)}
+  .projtab.active{background:var(--navy);color:#fff}
+  .projtab .cnt{font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;
+    background:rgba(255,255,255,.2)}
+  .projtab:not(.active) .cnt{background:#fff}
+  .projsw .lbl{font-size:12px;color:var(--muted);margin-left:auto}
+  .projsw select{height:29px;border:1px solid var(--border);border-radius:2px;
+    background:var(--disabled);font-family:inherit;font-size:13px;padding:0 10px}
+
+  /* ---- badges ---- */
+  .pbadge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;
+    padding:2px 8px;border-radius:2px}
+  .pbadge .dot{width:7px;height:7px;border-radius:50%}
+  .pii{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;
+    text-transform:uppercase;padding:3px 6px;border-radius:2px;color:#fff}
+  .chip{display:inline-block;font-size:11px;font-weight:500;padding:3px 9px;
+    border-radius:2px;background:var(--tint);color:var(--accent)}
+  .chip.method{font-weight:700;color:#fff}
+  .badge{display:inline-block;font-size:10px;font-weight:700;text-transform:uppercase;
+    padding:3px 6px;border-radius:2px}
+
+  /* ---- filter bar ---- */
+  .filterbar{background:var(--panel);border:1px solid var(--disabled);border-radius:3px;
+    padding:14px;margin-bottom:20px}
+  .filterbar .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .filterbar .req{font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted);
+    letter-spacing:.6px;margin-right:6px}
+  .fchip{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:5px 11px;
+    border:1px solid var(--border);border-radius:2px;background:#fff;cursor:pointer}
+  .fchip.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .fchip .c{opacity:.7;font-size:11px}
+  .filterbar .meta{font-size:12px;color:var(--sub);margin-top:10px;display:flex;gap:14px}
+
+  /* ---- tables ---- */
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  thead th{text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;
+    letter-spacing:.5px;color:var(--muted);padding:10px 12px;border-bottom:2px solid var(--disabled);
+    background:#fafbfb}
+  tbody td{padding:10px 12px;border-bottom:1px solid var(--disabled)}
+  tbody tr{cursor:pointer;transition:.15s}
+  tbody tr:hover td{background:var(--infobg)}
+  .dir{color:var(--accent);font-weight:700}
+
+  /* ---- view tabs ---- */
+  .vtabs{display:flex;gap:2px;margin-bottom:18px;border-bottom:1px solid var(--disabled)}
+  .vtab{background:none;border:none;font-family:inherit;font-size:14px;font-weight:500;
+    color:var(--sub);padding:10px 18px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+  .vtab:hover{color:var(--hover)}
+  .vtab.active{color:var(--accent);border-bottom-color:var(--accent)}
+
+  /* ---- lineage ---- */
+  .lineage{background:var(--panel);border:1px solid var(--disabled);border-radius:3px;
+    padding:0;height:420px;position:relative;overflow:hidden}
+  .planes{position:absolute;top:14px;left:14px;z-index:3;display:flex;gap:3px;
+    background:#fff;border:1px solid var(--disabled);border-radius:3px;padding:3px}
+  .plane{font-size:12px;font-weight:500;padding:5px 12px;border-radius:2px;cursor:pointer;color:var(--sub)}
+  .plane.on{background:var(--accent);color:#fff}
+  .lnode{position:absolute;width:170px;background:#fff;border:1px solid var(--border);
+    border-radius:3px;box-shadow:0 3px 5px rgba(0,0,0,.12);overflow:hidden}
+  .lnode .hd{padding:8px 10px 8px 12px;display:flex;align-items:center;gap:6px;
+    background:#fafbfb;border-bottom:1px solid var(--disabled)}
+  .lnode .stripe{position:absolute;left:0;top:0;bottom:0;width:4px}
+  .lnode .nm{font-size:12px;font-weight:600}
+  .lnode .ty{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+
+  /* ---- master-detail ---- */
+  .md{display:grid;grid-template-columns:240px 1fr;gap:0;background:var(--panel);
+    border:1px solid var(--disabled);border-radius:3px;overflow:hidden;min-height:440px}
+  .md .list{border-right:1px solid var(--disabled);overflow:auto;max-height:560px}
+  .md .item{padding:11px 14px;border-bottom:1px solid var(--disabled);cursor:pointer;
+    display:flex;align-items:center;gap:8px}
+  .md .item:hover{background:var(--infobg)}
+  .md .item.sel{background:var(--tint);border-left:3px solid var(--accent)}
+  .md .item .nm{font-size:13px;font-weight:500;flex:1}
+  .md .item .oc{font-size:11px;color:var(--muted);font-weight:700}
+  .md .detail{padding:24px}
+  .pdots{display:inline-flex;gap:3px}
+  .pdots .d{width:6px;height:6px;border-radius:50%}
+
+  /* ---- crossmap ---- */
+  .crossmap{display:flex;align-items:center;justify-content:center;gap:40px;padding:30px;
+    background:#fafbfb;border-radius:3px;margin-bottom:20px}
+  .cmnode{background:#fff;border:1px solid var(--border);border-radius:3px;padding:12px 16px;
+    text-align:center;min-width:120px;box-shadow:0 3px 5px rgba(0,0,0,.1)}
+  .cmnode .t{font-size:11px;color:var(--muted);text-transform:uppercase}
+  .cmnode .v{font-size:20px;font-weight:700;color:var(--navy)}
+  .cmcenter{background:var(--navy);color:#fff}
+  .cmcenter .t{color:#9fb0c9}.cmcenter .v{color:#fff}
+
+  /* ---- pii project view ---- */
+  .piigroup{margin-bottom:20px}
+  .piigroup .gh{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:500;
+    color:var(--navy);margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--disabled)}
+
+  .helpnote{font-size:12px;color:var(--sub);background:var(--infobg);border-left:3px solid var(--info);
+    padding:10px 14px;border-radius:0 2px 2px 0;margin-bottom:20px}
+
+  .mockbanner{background:var(--warningbg);border-bottom:1px solid var(--warning);
+    text-align:center;font-size:12px;color:#8a4a12;padding:6px;font-weight:500}
+</style>
+</head>
+<body>
+<div class="mockbanner">STATIC MOCKUP — visual preview only, no live data. Click the top nav and the project tabs to explore.</div>
+
+<header class="bbh">
+  <div class="logo"><span class="sq">CP</span> CP Catalog</div>
+  <nav id="nav">
+    <button data-s="landing" class="active">Home</button>
+    <button data-s="interface">Interface 360</button>
+    <button data-s="api">API 360</button>
+    <button data-s="data">Data 360</button>
+    <button data-s="datapoint">Datapoint 360</button>
+    <button data-s="pii">PII Explorer</button>
+  </nav>
+  <div class="right"><span><span class="livedot"></span>LIVE</span><span>BBH Capital Partners</span></div>
+</header>
+
+<main>
+
+  <!-- ============ LANDING ============ -->
+  <section class="screen active" id="landing">
+    <div class="sectionhead">CP Metadata Catalog
+      <span class="sub">Self-hosted · OpenMetadata-lite · 5 lenses · SEI vs Non-SEI</span></div>
+    <div class="kpis">
+      <div class="kpi"><div class="n">828</div><div class="l">Interfaces</div></div>
+      <div class="kpi"><div class="n">427</div><div class="l">API Endpoints</div></div>
+      <div class="kpi"><div class="n">1,204</div><div class="l">Datasets</div></div>
+      <div class="kpi"><div class="n">3,891</div><div class="l">Datapoints</div></div>
+      <div class="kpi pii"><div class="n">312</div><div class="l">PII Fields</div></div>
+    </div>
+
+    <div class="grid c2">
+      <div class="card">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:14px">SEI vs Non-SEI Breakdown</div>
+        <div class="grid c2" style="gap:14px">
+          <div style="border:1px solid var(--projSei);border-radius:3px;padding:14px;background:#f0fbff">
+            <div class="pbadge" style="background:rgba(0,145,191,.12);color:var(--projSei);margin-bottom:10px"><span class="dot" style="background:var(--projSei)"></span>SEI · SWP</div>
+            <div style="font-size:13px;line-height:1.9">
+              <b>215</b> APIs · <b>47</b> feeds<br><b>38</b> dbt models · <b>12</b> DAGs</div>
+          </div>
+          <div style="border:1px solid var(--mutedc);border-radius:3px;padding:14px;background:#f7f9fb">
+            <div class="pbadge" style="background:rgba(95,135,167,.12);color:var(--mutedc);margin-bottom:10px"><span class="dot" style="background:var(--mutedc)"></span>Non-SEI</div>
+            <div style="font-size:13px;line-height:1.9">
+              <b>212</b> APIs · <b>140</b> datasets<br><b>64</b> dbt models · <b>29</b> DAGs</div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:14px">Needs Attention</div>
+        <div style="display:flex;flex-direction:column;gap:10px;font-size:13px">
+          <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--disabled)"><span>\u26A0 Interfaces flagged for migration</span><b style="color:var(--warning)">63</b></div>
+          <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--disabled)"><span>\u26A0 Datasets failing quality gate</span><b style="color:var(--danger)">7</b></div>
+          <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--disabled)"><span>\uD83D\uDD12 SEI fields carrying Client-Level PII</span><b style="color:var(--danger)">88</b></div>
+          <div style="display:flex;justify-content:space-between;padding:8px 0"><span>\u21C4 Cross-project interfaces (SEI\u2194Non-SEI)</span><b style="color:var(--accent)">24</b></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid c4" style="margin-top:0">
+      <div class="card" style="border-top:3px solid var(--modInterface);cursor:pointer" onclick="go('interface')">
+        <div style="font-size:16px;font-weight:500;color:var(--navy);margin-bottom:6px">Interface 360</div>
+        <div style="font-size:12px;color:var(--sub)">System-to-system integration map from the 24-column inventory.</div></div>
+      <div class="card" style="border-top:3px solid var(--modApi);cursor:pointer" onclick="go('api')">
+        <div style="font-size:16px;font-weight:500;color:var(--navy);margin-bottom:6px">API 360</div>
+        <div style="font-size:12px;color:var(--sub)">API explorer grouped by Project \u2192 SEI (16 domains) vs Non-SEI.</div></div>
+      <div class="card" style="border-top:3px solid var(--modData);cursor:pointer" onclick="go('data')">
+        <div style="font-size:16px;font-weight:500;color:var(--navy);margin-bottom:6px">Data 360</div>
+        <div style="font-size:12px;color:var(--sub)">Lineage + feed dictionary across feeds, dbt models, and DAGs.</div></div>
+      <div class="card" style="border-top:3px solid var(--modDatapoint);cursor:pointer" onclick="go('datapoint')">
+        <div style="font-size:16px;font-weight:500;color:var(--navy);margin-bottom:6px">Datapoint 360</div>
+        <div style="font-size:12px;color:var(--sub)">Cross-cutting datapoint index with project provenance.</div></div>
+    </div>
+  </section>
+
+  <!-- ============ INTERFACE 360 ============ -->
+  <section class="screen" id="interface">
+    <div class="sectionhead">Interface 360 <span class="sub">System-to-system integration map</span></div>
+    <div class="kpis">
+      <div class="kpi"><div class="n">828</div><div class="l">Interfaces</div></div>
+      <div class="kpi"><div class="n">48</div><div class="l">Systems</div></div>
+      <div class="kpi warn"><div class="n">63</div><div class="l">\u26A0 Replace</div></div>
+      <div class="kpi pii"><div class="n">41</div><div class="l">\uD83D\uDD12 Carry PII</div></div>
+      <div class="kpi sei"><div class="n">24</div><div class="l">SEI \u2194 Non-SEI</div></div>
+    </div>
+
+    <div class="filterbar">
+      <div class="row">
+        <span class="req">Required</span>
+        <span class="fchip on">Source System <span class="c">\u2715</span></span>
+        <span class="fchip">Target System</span>
+        <span class="fchip on">Feed Type: Batch <span class="c">(287)</span></span>
+        <span class="fchip">Direction: Outbound</span>
+      </div>
+      <div class="meta"><span>Showing top 20 of 828</span><span>\u25A3 Density OK</span><span>Press <b>f</b> to filter \u00b7 <b>c</b> to clear</span></div>
+    </div>
+
+    <div class="vtabs">
+      <button class="vtab active">Table</button>
+      <button class="vtab">Matrix</button>
+      <button class="vtab">Routing Paths</button>
+    </div>
+
+    <div class="card" style="padding:0">
+      <table>
+        <thead><tr><th>Source</th><th>Project</th><th></th><th>Target</th><th>Project</th><th>Integration</th><th>Type</th><th>Freq</th><th>Migration</th><th>PII</th><th>Owner</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>AddVantage</b></td>
+            <td><span class="pbadge" style="background:rgba(234,88,12,.12);color:var(--projAddvantage)"><span class="dot" style="background:var(--projAddvantage)"></span>AddVantage</span></td>
+            <td class="dir">\u25B6</td><td><b>Pivotal CRM</b></td>
+            <td><span class="pbadge" style="background:rgba(124,58,237,.12);color:var(--projPivotal)"><span class="dot" style="background:var(--projPivotal)"></span>Pivotal</span></td>
+            <td>Accounts</td><td><span class="chip">Batch</span></td><td>Daily (TU-SAT)</td>
+            <td><span class="badge" style="background:var(--warningbg);color:var(--warning)">Replace</span></td><td></td><td>Kelley Barnhardt</td>
+          </tr>
+          <tr>
+            <td><b>AddVantage</b></td>
+            <td><span class="pbadge" style="background:rgba(234,88,12,.12);color:var(--projAddvantage)"><span class="dot" style="background:var(--projAddvantage)"></span>AddVantage</span></td>
+            <td class="dir">\u25B6</td><td><b>Pivotal CRM</b></td>
+            <td><span class="pbadge" style="background:rgba(124,58,237,.12);color:var(--projPivotal)"><span class="dot" style="background:var(--projPivotal)"></span>Pivotal</span></td>
+            <td>Positions</td><td><span class="chip">Batch</span></td><td>Daily (TU-SAT)</td>
+            <td><span class="badge" style="background:var(--warningbg);color:var(--warning)">Replace</span></td>
+            <td><span class="pii" style="background:var(--piiAccount)">PII \u00b7 ACCOUNT</span></td><td>Kelley Barnhardt</td>
+          </tr>
+          <tr>
+            <td><b>SEI SWP</b></td>
+            <td><span class="pbadge" style="background:rgba(0,145,191,.12);color:var(--projSei)"><span class="dot" style="background:var(--projSei)"></span>SEI</span></td>
+            <td class="dir">\u25B6</td><td><b>PBDW</b></td>
+            <td><span class="pbadge" style="background:rgba(15,71,117,.12);color:var(--projInternal)"><span class="dot" style="background:var(--projInternal)"></span>Internal</span></td>
+            <td>End of Day Positions</td><td><span class="chip">SFTP</span></td><td>EOD</td>
+            <td></td><td><span class="pii" style="background:var(--piiClient)">PII \u00b7 CLIENT</span></td><td>Data Eng</td>
+          </tr>
+          <tr>
+            <td><b>Charles River</b></td>
+            <td><span class="pbadge" style="background:rgba(37,99,235,.12);color:var(--projCharlesRiver)"><span class="dot" style="background:var(--projCharlesRiver)"></span>Charles River</span></td>
+            <td class="dir">\u25B6</td><td><b>RISK</b></td>
+            <td><span class="pbadge" style="background:rgba(15,71,117,.12);color:var(--projInternal)"><span class="dot" style="background:var(--projInternal)"></span>Internal</span></td>
+            <td>Orders</td><td><span class="chip">REST API</span></td><td>Intraday</td>
+            <td></td><td></td><td>Trading Sys</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="helpnote">The <b>Project</b> columns make SEI vs Non-SEI flows visible at a glance. Row 3 is a cross-project interface (SEI \u2192 Internal). Click any row to open the BBH drawer with full routing, PII, and deep links.</div>
+  </section>
+
+  <!-- ============ API 360 ============ -->
+  <section class="screen" id="api">
+    <div class="sectionhead">API 360 <span class="sub">SEI SWP (16 domains) vs Non-SEI</span></div>
+    <div class="projsw">
+      <button class="projtab active">All <span class="cnt">427</span></button>
+      <button class="projtab">SEI <span class="cnt">215</span></button>
+      <button class="projtab">Non-SEI <span class="cnt">212</span></button>
+      <span class="lbl">Filter by project:</span>
+      <select><option>All projects</option><option>SEI Wealth Platform</option><option>Bloomberg</option><option>Charles River</option></select>
+    </div>
+    <div class="vtabs">
+      <button class="vtab active">Sources</button>
+      <button class="vtab">API Dependency</button>
+      <button class="vtab">Business Flow</button>
+      <button class="vtab">Datapoint</button>
+      <button class="vtab">Search</button>
+    </div>
+
+    <div class="card" style="padding:16px 20px">
+      <div style="font-size:13px;font-weight:700;color:var(--projSei);margin-bottom:12px">\u25CF SEI / SWP \u2014 16 feature groups</div>
+      <table>
+        <thead><tr><th>Source / Domain</th><th>Project</th><th>Kind</th><th>Release</th><th>Endpoints</th><th>Errors</th><th>Fields</th></tr></thead>
+        <tbody>
+          <tr><td><b>Activity Management</b></td>
+            <td><span class="pbadge" style="background:rgba(0,145,191,.12);color:var(--projSei)"><span class="dot" style="background:var(--projSei)"></span>SEI</span></td>
+            <td><span class="chip">OpenAPI 3.0</span></td><td>PSI45</td><td>18</td><td>312</td><td>146</td></tr>
+          <tr><td><b>Core Accounting</b></td>
+            <td><span class="pbadge" style="background:rgba(0,145,191,.12);color:var(--projSei)"><span class="dot" style="background:var(--projSei)"></span>SEI</span></td>
+            <td><span class="chip">OpenAPI 3.0</span></td><td>PSI45</td><td>34</td><td>588</td><td>402</td></tr>
+          <tr><td><b>Order Management</b></td>
+            <td><span class="pbadge" style="background:rgba(0,145,191,.12);color:var(--projSei)"><span class="dot" style="background:var(--projSei)"></span>SEI</span></td>
+            <td><span class="chip">OpenAPI 3.0</span></td><td>PSI45</td><td>22</td><td>401</td><td>233</td></tr>
+        </tbody>
+      </table>
+      <div style="font-size:13px;font-weight:700;color:var(--mutedc);margin:18px 0 12px">\u25CF Non-SEI</div>
+      <table>
+        <thead><tr><th>Source</th><th>Project</th><th>Kind</th><th>Version</th><th>Endpoints</th><th>Errors</th><th>Fields</th></tr></thead>
+        <tbody>
+          <tr><td><b>Bloomberg BLPAPI</b></td>
+            <td><span class="pbadge" style="background:rgba(0,0,0,.08);color:#000"><span class="dot" style="background:#000"></span>Bloomberg</span></td>
+            <td><span class="chip">REST</span></td><td>v3</td><td>12</td><td>40</td><td>88</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+        <span class="pbadge" style="background:rgba(0,145,191,.12);color:var(--projSei)"><span class="dot" style="background:var(--projSei)"></span>SEI</span>
+        <b style="font-size:15px">POST /accountOverride/update</b>
+        <span class="chip method" style="background:var(--success)">POST</span>
+        <span style="margin-left:auto;font-size:12px;color:var(--muted)">Function Point Id <b>491</b> \u00b7 Activity Management \u00b7 PSI45</span>
+      </div>
+      <div style="display:flex;gap:30px;font-size:13px">
+        <div><span style="color:var(--muted)">Request fields</span><br><b style="font-size:18px">6</b></div>
+        <div><span style="color:var(--muted)">Documented errors</span><br><b style="font-size:18px">29</b></div>
+        <div><span style="color:var(--muted)">Examples</span><br><b style="font-size:18px">4</b></div>
+        <div><span style="color:var(--muted)">Auth</span><br><b style="font-size:14px">AppKey + Bearer</b></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ DATA 360 ============ -->
+  <section class="screen" id="data">
+    <div class="sectionhead">Data 360 <span class="sub">Lineage + feed dictionary</span></div>
+    <div class="projsw">
+      <button class="projtab active">All <span class="cnt">1,204</span></button>
+      <button class="projtab">SEI <span class="cnt">85</span></button>
+      <button class="projtab">Non-SEI <span class="cnt">1,119</span></button>
+      <span class="lbl">Filter by project:</span>
+      <select><option>All projects</option><option>SEI Wealth Platform</option><option>Internal / In-House</option></select>
+    </div>
+    <div class="filterbar">
+      <div class="row">
+        <span class="req">Required</span>
+        <span class="fchip on">Plane: Transform</span>
+        <span class="fchip on">Layer: All</span>
+        <span class="fchip">Source Dataset</span>
+        <span class="fchip">Target Dataset</span>
+      </div>
+      <div class="meta"><span>Showing 9 nodes</span><span>\u25A3 Density OK (threshold 50)</span></div>
+    </div>
+
+    <div class="lineage">
+      <div class="planes"><span class="plane">Data</span><span class="plane on">Transform</span><span class="plane">Orchestration</span></div>
+      <!-- SEI row -->
+      <div class="lnode" style="left:40px;top:50px"><div class="stripe" style="background:var(--projSei)"></div>
+        <div class="hd"><div><div class="nm">SWP Taxlot</div><div class="ty">FEED \u00b7 SEI</div></div>
+        <span class="pbadge" style="margin-left:auto;background:rgba(0,145,191,.12);color:var(--projSei);padding:1px 6px"><span class="dot" style="background:var(--projSei)"></span></span></div></div>
+      <div class="lnode" style="left:280px;top:50px"><div class="stripe" style="background:var(--bronze)"></div>
+        <div class="hd"><div><div class="nm">sei_brz_taxlot</div><div class="ty">MODEL \u00b7 bronze</div></div>
+        <span class="pbadge" style="margin-left:auto;background:rgba(0,145,191,.12);color:var(--projSei);padding:1px 6px"><span class="dot" style="background:var(--projSei)"></span></span></div></div>
+      <div class="lnode" style="left:520px;top:50px"><div class="stripe" style="background:var(--silver)"></div>
+        <div class="hd"><div><div class="nm">sei_slv_taxlot</div><div class="ty">MODEL \u00b7 silver</div></div>
+        <span class="pbadge" style="margin-left:auto;background:rgba(0,145,191,.12);color:var(--projSei);padding:1px 6px"><span class="dot" style="background:var(--projSei)"></span></span></div></div>
+      <div class="lnode" style="left:760px;top:50px"><div class="stripe" style="background:var(--gold)"></div>
+        <div class="hd"><div><div class="nm">gld_position_summary</div><div class="ty">MODEL \u00b7 gold</div></div>
+        <span class="pbadge" style="margin-left:auto;background:rgba(0,145,191,.12);color:var(--projSei);padding:1px 6px"><span class="dot" style="background:var(--projSei)"></span></span></div></div>
+      <!-- Non-SEI row -->
+      <div class="lnode" style="left:40px;top:230px"><div class="stripe" style="background:var(--projInternal)"></div>
+        <div class="hd"><div><div class="nm">RISK.positions</div><div class="ty">TABLE \u00b7 mssql</div></div>
+        <span class="pbadge" style="margin-left:auto;background:rgba(15,71,117,.12);color:var(--projInternal);padding:1px 6px"><span class="dot" style="background:var(--projInternal)"></span></span></div></div>
+      <div class="lnode" style="left:280px;top:230px"><div class="stripe" style="background:var(--bronze)"></div>
+        <div class="hd"><div><div class="nm">brz_positions</div><div class="ty">MODEL \u00b7 bronze</div></div>
+        <span class="pbadge" style="margin-left:auto;background:rgba(15,71,117,.12);color:var(--projInternal);padding:1px 6px"><span class="dot" style="background:var(--projInternal)"></span></span></div></div>
+      <div class="lnode" style="left:520px;top:230px"><div class="stripe" style="background:var(--silver)"></div>
+        <div class="hd"><div><div class="nm">slv_positions</div><div class="ty">MODEL \u00b7 silver</div></div>
+        <span class="pbadge" style="margin-left:auto;background:rgba(15,71,117,.12);color:var(--projInternal);padding:1px 6px"><span class="dot" style="background:var(--projInternal)"></span></span></div></div>
+      <svg style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1">
+        <defs><marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#b5b6b6"/></marker></defs>
+        <path d="M210,75 C245,75 245,75 280,75" stroke="#b5b6b6" fill="none" marker-end="url(#a)"/>
+        <path d="M450,75 C485,75 485,75 520,75" stroke="#b5b6b6" fill="none" marker-end="url(#a)"/>
+        <path d="M690,75 C725,75 725,75 760,75" stroke="#b5b6b6" fill="none" marker-end="url(#a)"/>
+        <path d="M210,255 C245,255 245,255 280,255" stroke="#b5b6b6" fill="none" marker-end="url(#a)"/>
+        <path d="M450,255 C485,255 485,255 520,255" stroke="#b5b6b6" fill="none" marker-end="url(#a)"/>
+        <path d="M845,100 C845,200 690,180 690,255" stroke="var(--projSei)" stroke-dasharray="4 3" fill="none" marker-end="url(#a)"/>
+      </svg>
+      <div style="position:absolute;bottom:14px;left:14px;background:#fff;border:1px solid var(--disabled);border-radius:3px;padding:8px 12px;font-size:11px;color:var(--sub);display:flex;gap:12px;z-index:2">
+        <span><span style="display:inline-block;width:10px;height:10px;background:var(--bronze);border-radius:2px;margin-right:4px"></span>bronze</span>
+        <span><span style="display:inline-block;width:10px;height:10px;background:var(--silver);border-radius:2px;margin-right:4px"></span>silver</span>
+        <span><span style="display:inline-block;width:10px;height:10px;background:var(--gold);border-radius:2px;margin-right:4px"></span>gold</span>
+        <span style="color:var(--projSei)">\u254C\u254C dashed = cross-project edge (SEI gold \u2192 internal)</span>
+      </div>
+    </div>
+    <div class="helpnote">Top row is the <b>SEI</b> medallion (FEED \u2192 bronze \u2192 silver \u2192 gold, cyan project badges). Bottom row is <b>Internal</b> (MSSQL table \u2192 medallion, dark-blue badges). The dashed cyan edge shows SEI gold consumed by an internal model \u2014 a cross-project dependency.</div>
+  </section>
+
+  <!-- ============ DATAPOINT 360 ============ -->
+  <section class="screen" id="datapoint">
+    <div class="sectionhead">Datapoint 360 <span class="sub">Cross-cutting datapoint index</span></div>
+    <div class="projsw">
+      <button class="projtab active">All <span class="cnt">3,891</span></button>
+      <button class="projtab">SEI <span class="cnt">1,420</span></button>
+      <button class="projtab">Non-SEI <span class="cnt">2,471</span></button>
+      <span class="lbl">\u2611 Cross-project only</span>
+    </div>
+    <div class="md">
+      <div class="list">
+        <div class="item sel"><span class="nm">accountId</span><span class="pdots"><span class="d" style="background:var(--projSei)"></span><span class="d" style="background:var(--projPivotal)"></span></span><span class="oc">142</span></div>
+        <div class="item"><span class="nm">portfolioId</span><span class="pdots"><span class="d" style="background:var(--projSei)"></span></span><span class="oc">98</span></div>
+        <div class="item"><span class="nm">taxlotId</span><span class="pdots"><span class="d" style="background:var(--projSei)"></span></span><span class="oc">54</span></div>
+        <div class="item"><span class="nm">clientName</span><span class="pdots"><span class="d" style="background:var(--projSei)"></span><span class="d" style="background:var(--projPivotal)"></span><span class="d" style="background:var(--projInternal)"></span></span><span class="oc">47</span></div>
+        <div class="item"><span class="nm">positionQty</span><span class="pdots"><span class="d" style="background:var(--projSei)"></span><span class="d" style="background:var(--projInternal)"></span></span><span class="oc">39</span></div>
+      </div>
+      <div class="detail">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+          <h2 style="margin:0;font-size:22px;color:var(--navy)">accountId</h2>
+          <span class="pii" style="background:var(--piiAccount)">PII \u00b7 ACCOUNT</span>
+        </div>
+        <div style="font-size:13px;color:var(--sub);margin-bottom:20px">Appears in <b>142</b> places across <b>2 projects</b> and <b>3 modules</b></div>
+
+        <div class="crossmap">
+          <div class="cmnode"><div class="t">API 360</div><div class="v">61</div></div>
+          <div class="cmnode"><div class="t">Data 360</div><div class="v">58</div></div>
+          <div class="cmnode cmcenter"><div class="t">accountId</div><div class="v">142</div></div>
+          <div class="cmnode"><div class="t">Interface 360</div><div class="v">23</div></div>
+        </div>
+
+        <div class="card" style="margin:0">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:12px">Project Breakdown</div>
+          <div style="display:flex;gap:24px">
+            <div><span class="pbadge" style="background:rgba(0,145,191,.12);color:var(--projSei)"><span class="dot" style="background:var(--projSei)"></span>SEI</span> <b style="font-size:18px;margin-left:6px">95</b> <span style="color:var(--muted);font-size:12px">occurrences</span></div>
+            <div><span class="pbadge" style="background:rgba(124,58,237,.12);color:var(--projPivotal)"><span class="dot" style="background:var(--projPivotal)"></span>Pivotal</span> <b style="font-size:18px;margin-left:6px">47</b> <span style="color:var(--muted);font-size:12px">occurrences</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PII EXPLORER ============ -->
+  <section class="screen" id="pii">
+    <div class="sectionhead">PII Explorer <span class="sub">Sensitivity classification across all modules</span></div>
+    <div class="kpis">
+      <div class="kpi"><div class="n">38</div><div class="l">PII Attributes</div></div>
+      <div class="kpi"><div class="n">94</div><div class="l">Components</div></div>
+      <div class="kpi pii"><div class="n">312</div><div class="l">Affected Fields</div></div>
+      <div class="kpi sei"><div class="n">88</div><div class="l">SEI</div></div>
+      <div class="kpi"><div class="n">224</div><div class="l">Non-SEI</div></div>
+    </div>
+    <div class="vtabs">
+      <button class="vtab">By Attribute</button>
+      <button class="vtab">By Component</button>
+      <button class="vtab">By Module</button>
+      <button class="vtab active">By Project</button>
+    </div>
+
+    <div class="piigroup">
+      <div class="gh"><span class="pbadge" style="background:rgba(0,145,191,.12);color:var(--projSei)"><span class="dot" style="background:var(--projSei)"></span>SEI \u00b7 SWP</span> <span style="font-size:13px;color:var(--muted)">88 PII fields</span></div>
+      <div class="grid c3">
+        <div class="card" style="margin:0;border-left:3px solid var(--piiClient)">
+          <div class="pii" style="background:var(--piiClient);margin-bottom:8px">Client Level</div>
+          <div style="font-size:24px;font-weight:700;color:var(--navy)">52</div>
+          <div style="font-size:12px;color:var(--sub)">Client Name, SSN, Passport, Address\u2026</div></div>
+        <div class="card" style="margin:0;border-left:3px solid var(--piiAccount)">
+          <div class="pii" style="background:var(--piiAccount);margin-bottom:8px">Account Level</div>
+          <div style="font-size:24px;font-weight:700;color:var(--navy)">28</div>
+          <div style="font-size:12px;color:var(--sub)">Account Number, Custody Account\u2026</div></div>
+        <div class="card" style="margin:0;border-left:3px solid var(--piiAsset)">
+          <div class="pii" style="background:var(--piiAsset);margin-bottom:8px">Asset Level</div>
+          <div style="font-size:24px;font-weight:700;color:var(--navy)">8</div>
+          <div style="font-size:12px;color:var(--sub)">Issuer Name, Asset Instrument Name</div></div>
+      </div>
+    </div>
+
+    <div class="piigroup">
+      <div class="gh"><span class="pbadge" style="background:rgba(124,58,237,.12);color:var(--projPivotal)"><span class="dot" style="background:var(--projPivotal)"></span>Pivotal CRM</span> <span style="font-size:13px;color:var(--muted)">63 PII fields</span></div>
+      <div class="grid c3">
+        <div class="card" style="margin:0;border-left:3px solid var(--piiClient)">
+          <div class="pii" style="background:var(--piiClient);margin-bottom:8px">Client Level</div>
+          <div style="font-size:24px;font-weight:700;color:var(--navy)">41</div>
+          <div style="font-size:12px;color:var(--sub)">Client Name, Email, DOB\u2026</div></div>
+        <div class="card" style="margin:0;border-left:3px solid var(--piiAccount)">
+          <div class="pii" style="background:var(--piiAccount);margin-bottom:8px">Account Level</div>
+          <div style="font-size:24px;font-weight:700;color:var(--navy)">22</div>
+          <div style="font-size:12px;color:var(--sub)">Account Name, Account Number</div></div>
+        <div class="card" style="margin:0;opacity:.5">
+          <div style="font-size:12px;color:var(--muted)">No Asset-level PII</div></div>
+      </div>
+    </div>
+    <div class="helpnote"><b>By Project</b> view answers compliance questions in one glance: "Which SEI fields carry Client-Level PII?" \u2192 52. Each card is clickable, deep-linking to the affected fields with the project context preserved.</div>
+  </section>
+
+</main>
+
+<script>
+  const nav = document.getElementById('nav');
+  function go(s){
+    document.querySelectorAll('.screen').forEach(x=>x.classList.toggle('active', x.id===s));
+    nav.querySelectorAll('button').forEach(b=>b.classList.toggle('active', b.dataset.s===s));
+    window.scrollTo({top:0,behavior:'smooth'});
+  }
+  nav.addEventListener('click', e=>{ if(e.target.dataset.s) go(e.target.dataset.s); });
+  // project tab + view tab toggles (visual only)
+  document.querySelectorAll('.projsw').forEach(sw=>{
+    sw.querySelectorAll('.projtab').forEach(t=>t.addEventListener('click',()=>{
+      sw.querySelectorAll('.projtab').forEach(x=>x.classList.remove('active'));
+      t.classList.add('active');
+    }));
+  });
+  document.querySelectorAll('.vtabs').forEach(vt=>{
+    vt.querySelectorAll('.vtab').forEach(t=>t.addEventListener('click',()=>{
+      vt.querySelectorAll('.vtab').forEach(x=>x.classList.remove('active'));
+      t.classList.add('active');
+    }));
+  });
+  document.querySelectorAll('.planes').forEach(pl=>{
+    pl.querySelectorAll('.plane').forEach(p=>p.addEventListener('click',()=>{
+      pl.querySelectorAll('.plane').forEach(x=>x.classList.remove('on'));
+      p.classList.add('on');
+    }));
+  });
+  document.querySelectorAll('.md .item').forEach(it=>it.addEventListener('click',()=>{
+    document.querySelectorAll('.md .item').forEach(x=>x.classList.remove('sel'));
+    it.classList.add('sel');
+  }));
+</script>
+</body>
+</html>
