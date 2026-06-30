@@ -89,6 +89,26 @@
   .modebadge{font-size:9px;font-weight:700;padding:2px 8px;border-radius:10px;color:#fff}
   .modebadge.rt{background:var(--realtime)}.modebadge.bt{background:var(--batch)}
   .bar{height:22px;border-radius:3px;background:var(--data);display:flex;align-items:center;padding:0 8px;color:#fff;font-size:11px;font-weight:600;min-width:30px}
+  .pf{background:none;border:none;color:#bcccdf;font-size:11px;font-weight:600;padding:4px 11px;border-radius:11px;cursor:pointer;font-family:inherit}
+  .pf.on{background:var(--pop);color:var(--navy)}
+  .filterbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px;padding:11px 14px;background:var(--panel);border:1px solid var(--border);border-radius:8px}
+  .filterbar label{font-size:10px;font-weight:700;text-transform:uppercase;color:var(--muted);margin-right:3px}
+  .filterbar select{font-size:12px;padding:5px 9px;border:1px solid var(--border);border-radius:6px;font-family:inherit;background:var(--panel)}
+  .viewtoggle{display:flex;gap:2px;background:var(--soft);border-radius:7px;padding:3px;margin-left:auto}
+  .viewtoggle button{background:none;border:none;font-size:12px;font-weight:600;padding:5px 13px;border-radius:5px;cursor:pointer;color:var(--sub);font-family:inherit}
+  .viewtoggle button.on{background:var(--panel);color:var(--accent);box-shadow:0 1px 3px rgba(0,0,0,.1)}
+  .builder{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px;margin-top:6px}
+  .pickitem{display:flex;align-items:center;gap:9px;padding:8px 11px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;cursor:grab;background:var(--soft)}
+  .pickitem:hover{border-color:var(--accent)}
+  .pickitem .drag{color:var(--muted);font-size:14px}
+  .steprow{display:flex;align-items:center;gap:9px;padding:9px 12px;border:1px solid var(--accent);border-radius:6px;margin-bottom:6px;background:var(--info)}
+  .steprow .ord{width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:11px;font-weight:700;display:grid;place-items:center;flex-shrink:0}
+  .hopchain{display:flex;align-items:center;flex-wrap:wrap;gap:0;padding:18px;background:var(--panel);border:1px solid var(--border);border-radius:8px}
+  .hop{background:var(--navy);color:#fff;border-radius:8px;padding:11px 16px;text-align:center;min-width:120px}
+  .hop .ht{font-weight:700;font-size:13px}.hop .hs{font-size:10px;opacity:.8}
+  .hop.legacy{background:var(--nonsei)}.hop.sei{background:var(--sei)}.hop.target{background:var(--accent)}
+  .hoparrow{color:var(--hover);font-size:20px;padding:0 8px;font-weight:700}
+  .hoparrow .hl{font-size:9px;color:var(--muted);display:block;text-align:center}
 </style>
 </head>
 <body>
@@ -108,6 +128,11 @@
     <a onclick="go('interface')" id="nav-interface">Interface 360</a>
     <a onclick="go('search')" id="nav-search">Search</a>
   </nav>
+  <div style="display:flex;align-items:center;gap:4px;background:rgba(255,255,255,.1);border-radius:14px;padding:3px;margin-left:10px" id="projfilter">
+    <button onclick="setProj('all',this)" class="pf on">All</button>
+    <button onclick="setProj('sei',this)" class="pf">SEI</button>
+    <button onclick="setProj('nonsei',this)" class="pf">Non-SEI</button>
+  </div>
 </div>
 
 <div class="wrap">
@@ -176,7 +201,43 @@
       <button onclick="ptab(this,'api','sources')">Sources</button>
     </div>
     <div class="pane on" id="api-flows">
-      <div class="layout">
+      <div class="filterbar">
+        <label>Domain</label>
+        <select><option>All</option><option>Account & Client Lifecycle</option><option>Portfolio Accounting</option><option>SMA</option></select>
+        <label>Source</label>
+        <select><option>All</option><option>account.openapi</option><option>activity-management.openapi</option></select>
+        <label>Entity</label>
+        <select><option>All</option><option>accountNumber</option><option>portfolioId</option></select>
+        <button onclick="apiBuilder(true)" style="margin-left:auto;background:var(--post);color:#fff;border:none;border-radius:6px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">+ New Flow</button>
+      </div>
+
+      <div id="api-builder" style="display:none">
+        <div class="builder">
+          <div style="display:flex;align-items:center;margin-bottom:14px"><div style="font-size:16px;font-weight:600;color:var(--navy)">Flow Builder — assemble API endpoints</div>
+            <button onclick="apiBuilder(false)" style="margin-left:auto;background:none;border:1px solid var(--border);border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer">Cancel</button>
+            <button style="margin-left:8px;background:var(--ok);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer">Save Flow</button></div>
+          <input placeholder="Flow name…" style="width:300px;padding:8px 12px;font-size:13px;border:1px solid var(--border);border-radius:6px;margin-bottom:14px">
+          <div class="layout">
+            <div style="flex:1">
+              <div class="sec">1 · Search &amp; pick endpoints</div>
+              <input placeholder="Search SEI API endpoints…" style="width:100%;padding:7px 11px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
+              <div class="pickitem"><span class="drag">⠿</span><span class="mb POST">POST</span><span class="mono" style="font-size:12px">/oauthsecurity/access_token</span><span style="margin-left:auto;color:var(--accent);cursor:pointer">+ add</span></div>
+              <div class="pickitem"><span class="drag">⠿</span><span class="mb POST">POST</span><span class="mono" style="font-size:12px">/activity/enroll</span><span style="margin-left:auto;color:var(--accent);cursor:pointer">+ add</span></div>
+              <div class="pickitem"><span class="drag">⠿</span><span class="mb POST">POST</span><span class="mono" style="font-size:12px">/account/create</span><span style="margin-left:auto;color:var(--accent);cursor:pointer">+ add</span></div>
+              <div class="pickitem"><span class="drag">⠿</span><span class="mb GET">GET</span><span class="mono" style="font-size:12px">/account/{id}</span><span style="margin-left:auto;color:var(--accent);cursor:pointer">+ add</span></div>
+            </div>
+            <div style="flex:1">
+              <div class="sec">2 · Order steps (drag) — produces/consumes checked</div>
+              <div class="steprow"><span class="ord">1</span><span class="mb POST">POST</span><span class="mono" style="font-size:12px">/oauthsecurity/access_token</span><span style="margin-left:auto;font-size:9px;color:var(--ok);font-weight:700">✓ produces access_token</span></div>
+              <div class="steprow"><span class="ord">2</span><span class="mb POST">POST</span><span class="mono" style="font-size:12px">/activity/enroll</span><span style="margin-left:auto;font-size:9px;color:var(--ok);font-weight:700">✓ access_token ok</span></div>
+              <div class="steprow"><span class="ord">3</span><span class="mb POST">POST</span><span class="mono" style="font-size:12px">/account/create</span><span style="margin-left:auto;font-size:9px;color:var(--ok);font-weight:700">✓ parentActivityId ok</span></div>
+              <div style="font-size:11px;color:var(--muted);margin-top:8px">Drag to reorder. A red flag appears if a step consumes an entity no earlier step produces.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="api-flowlist" class="layout">
         <div class="listcol">
           <div class="gl">Flows</div>
           <button class="litem on"><div class="nm">client_account_onboarding</div><div class="mt">Account Lifecycle · 4 steps</div></button>
@@ -184,7 +245,8 @@
           <button class="litem"><div class="nm">positions_realtime_retrieve</div><div class="mt">Portfolio · 3 steps</div></button>
         </div>
         <div class="detail">
-          <div style="display:flex;align-items:center;gap:10px"><div style="font-size:18px;font-weight:600;color:var(--navy)">client_account_onboarding</div><span class="modebadge rt">REAL-TIME</span></div>
+          <div style="display:flex;align-items:center;gap:10px"><div style="font-size:18px;font-weight:600;color:var(--navy)">client_account_onboarding</div><span class="modebadge rt">REAL-TIME</span>
+            <button onclick="apiBuilder(true)" style="margin-left:auto;background:none;border:1px solid var(--accent);color:var(--accent);border-radius:6px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">Edit Flow</button></div>
           <div class="lead">Goal: initiate enrollment · Trigger: user_action_enroll · Primary entity: accountNumber · Replaces AddV account-open STP</div>
           <div class="chain">
             <div class="gnode"><div class="gm" style="color:var(--post)">POST · 1</div><div class="gp">/oauthsecurity/access_token</div><div class="gd">produces access_token</div></div><span class="ar">→</span>
@@ -235,7 +297,41 @@
 
     <!-- pipelines -->
     <div class="pane on" id="data-pipe">
-      <div class="layout">
+      <div class="filterbar">
+        <label>Domain</label><select><option>All</option><option>Account & Client Lifecycle</option><option>Portfolio Accounting</option></select>
+        <label>Archetype</label><select><option>All</option><option>inbound_ingest</option><option>outbound_publish</option><option>compute_derive</option></select>
+        <label>Direction</label><select><option>All</option><option>Inbound</option><option>Outbound</option></select>
+        <label>Schedule</label><select><option>All</option><option>EOD</option><option>BOD</option><option>Intraday</option></select>
+        <button onclick="dataBuilder(true)" style="margin-left:auto;background:var(--data);color:#fff;border:none;border-radius:6px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">+ New Pipeline</button>
+      </div>
+
+      <div id="data-builder" style="display:none">
+        <div class="builder">
+          <div style="display:flex;align-items:center;margin-bottom:14px"><div style="font-size:16px;font-weight:600;color:var(--navy)">Pipeline Builder — assemble batch stages</div>
+            <button onclick="dataBuilder(false)" style="margin-left:auto;background:none;border:1px solid var(--border);border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer">Cancel</button>
+            <button style="margin-left:8px;background:var(--ok);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer">Save Pipeline</button></div>
+          <input placeholder="Pipeline name…" style="width:300px;padding:8px 12px;font-size:13px;border:1px solid var(--border);border-radius:6px;margin-bottom:14px">
+          <div class="layout">
+            <div style="flex:1">
+              <div class="sec">1 · Pick stages</div>
+              <div class="pickitem"><span class="drag">⠿</span><span class="pill" style="background:var(--inbound)">FEED</span><span>Client (inbound feed)</span><span style="margin-left:auto;color:var(--accent);cursor:pointer">+ add</span></div>
+              <div class="pickitem"><span class="drag">⠿</span><span class="pill" style="background:var(--bronze)">dbt</span><span>sei_brz_client</span><span style="margin-left:auto;color:var(--accent);cursor:pointer">+ add</span></div>
+              <div class="pickitem"><span class="drag">⠿</span><span class="pill" style="background:var(--gold)">dbt</span><span>sei_gld_clients</span><span style="margin-left:auto;color:var(--accent);cursor:pointer">+ add</span></div>
+              <div class="pickitem"><span class="drag">⠿</span><span class="pill" style="background:var(--outbound)">LOADER</span><span>Pivotal CRM target</span><span style="margin-left:auto;color:var(--accent);cursor:pointer">+ add</span></div>
+            </div>
+            <div style="flex:1">
+              <div class="sec">2 · Order (drag) — batch stage chain</div>
+              <div class="steprow"><span class="ord">1</span><span class="pill" style="background:var(--sei)">SOURCE</span><span>SEI SWP</span></div>
+              <div class="steprow"><span class="ord">2</span><span class="pill" style="background:var(--inbound)">FEED</span><span>Client</span></div>
+              <div class="steprow"><span class="ord">3</span><span class="pill" style="background:var(--bronze)">BRONZE</span><span>sei_brz_client</span></div>
+              <div class="steprow"><span class="ord">4</span><span class="pill" style="background:var(--gold)">GOLD</span><span>sei_gld_clients</span></div>
+              <div class="steprow"><span class="ord">5</span><span class="pill" style="background:var(--nonsei)">TARGET</span><span>Pivotal CRM</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="data-pipelist" class="layout">
         <div class="listcol">
           <div class="gl">Pipelines (444)</div>
           <button class="litem on"><div class="nm">Accounts → Pivotal CRM</div><div class="mt"><span class="pill" style="background:var(--outbound)">OUT</span> EOD · outbound_publish</div></button>
@@ -243,7 +339,8 @@
           <button class="litem"><div class="nm">EOD Positions ingest</div><div class="mt"><span class="pill" style="background:var(--inbound)">IN</span> EOD · inbound_ingest</div></button>
         </div>
         <div class="detail">
-          <div style="display:flex;align-items:center;gap:10px"><div style="font-size:18px;font-weight:600;color:var(--navy)">Accounts → Pivotal CRM</div><span class="modebadge bt">BATCH · EOD</span><span class="pill" style="background:var(--outbound)">OUTBOUND</span></div>
+          <div style="display:flex;align-items:center;gap:10px"><div style="font-size:18px;font-weight:600;color:var(--navy)">Accounts → Pivotal CRM</div><span class="modebadge bt">BATCH · EOD</span><span class="pill" style="background:var(--outbound)">OUTBOUND</span>
+            <button onclick="dataBuilder(true)" style="margin-left:auto;background:none;border:1px solid var(--accent);color:var(--accent);border-radius:6px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">Edit Pipeline</button></div>
           <div class="lead">Client account data (account number, title, RM, mkt value, AUM). Owner: Kelley B · Archetype: outbound_publish</div>
           <div class="mapgrid" style="margin-bottom:14px">
             <div class="k">Legacy</div><div class="v">AddVantage Pivotal CRM/SalesX Accounts</div>
@@ -342,12 +439,47 @@
 
     <!-- lineage -->
     <div class="pane" id="data-lineage">
-      <p class="lead">Data / Transform / Orchestration planes.</p>
+      <p class="lead">Orchestration (Airflow) + transformation (dbt) detail per pipeline. Shows the DAG schedule and each
+        dbt model's materialization, transformation SQL, and tests.</p>
+      <div class="sec">① Airflow orchestration</div>
+      <div style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><span class="mono" style="font-weight:600;font-size:14px">dag_publish_clients_to_pivotal</span>
+          <span class="pill" style="background:var(--batch)">schedule: 0 2 * * 2-6 (TU-SAT 02:00)</span><span class="pill" style="background:var(--ok)">last run: success</span></div>
+        <div class="chain" style="margin:0">
+          <div class="gnode"><div class="gm">TASK</div><div class="gp">extract_client_feed</div></div><span class="ar">→</span>
+          <div class="gnode"><div class="gm">TASK</div><div class="gp">dbt_run client</div></div><span class="ar">→</span>
+          <div class="gnode"><div class="gm">TASK</div><div class="gp">dbt_test client</div></div><span class="ar">→</span>
+          <div class="gnode"><div class="gm">TASK</div><div class="gp">format_loader_file</div></div><span class="ar">→</span>
+          <div class="gnode"><div class="gm">TASK</div><div class="gp">sftp_to_pivotal</div></div>
+        </div>
+      </div>
+      <div class="sec">② dbt transformation rules (per model)</div>
       <div class="chain">
-        <div class="gnode" style="border-left:3px solid var(--inbound)"><div class="gp">Client feed</div><div class="gd">FEED · bronze</div></div><span class="ar">→</span>
-        <div class="gnode" style="border-left:3px solid var(--bronze)"><div class="gp">sei_brz_client</div></div><span class="ar">→</span>
-        <div class="gnode" style="border-left:3px solid var(--silver)"><div class="gp">sei_slv_client</div></div><span class="ar">→</span>
-        <div class="gnode" style="border-left:3px solid var(--gold)"><div class="gp">sei_gld_clients</div><div class="gd">shared by 30 pipelines</div></div>
+        <div class="gnode" style="border-left:3px solid var(--bronze)"><div class="gm" style="color:var(--bronze)">BRONZE</div><div class="gp">sei_brz_client</div><div class="gd">view · raw load</div></div><span class="ar">→</span>
+        <div class="gnode" style="border-left:3px solid var(--silver)"><div class="gm" style="color:var(--silver)">SILVER</div><div class="gp">sei_slv_client</div><div class="gd">incremental · cleansed</div></div><span class="ar">→</span>
+        <div class="gnode" style="border-left:3px solid var(--gold)" onclick="document.getElementById('dbtrule').style.display='block'"><div class="gm" style="color:var(--gold)">GOLD</div><div class="gp">sei_gld_clients</div><div class="gd">table · click for rule</div></div>
+      </div>
+      <div id="dbtrule" style="display:none;margin-top:12px">
+        <div class="mapgrid" style="margin-bottom:10px">
+          <div class="k">Materialization</div><div class="v mono">table</div>
+          <div class="k">Tests</div><div class="v">unique(account_number) · not_null(account_number, client_id) · relationships(portfolio_id)</div>
+          <div class="k">Meta</div><div class="v" style="border-bottom:none">domain: client · pii: yes · owner: Kelley B</div>
+        </div>
+        <div class="sec">Transformation SQL</div>
+        <pre>{{ config(materialized='table', tags=['client','eod']) }}
+SELECT account_number,
+       client_id,
+       INITCAP(account_display_name)        AS client_name,
+       portfolio_id,
+       base_currency,
+       CURRENT_DATE                         AS as_of_date
+FROM {{ ref('sei_slv_client') }}
+WHERE account_status = 'ACTIVE'</pre>
+        <div class="sec">Column lineage</div>
+        <table><thead><tr><th>Source</th><th>→</th><th>Target</th><th>Rule</th></tr></thead><tbody>
+          <tr><td class="mono">account_display_name</td><td>→</td><td class="mono">client_name</td><td class="mono">INITCAP(...)</td></tr>
+          <tr><td class="mono">account_number</td><td>→</td><td class="mono">account_number</td><td>passthrough (key)</td></tr>
+        </tbody></table>
       </div>
     </div>
   </div>
@@ -389,6 +521,26 @@
           <tr><td class="mono">account_retrieve</td><td><span class="modebadge rt">REAL-TIME</span></td><td>API 360</td><td>inbound · primary key</td></tr>
           <tr><td class="mono">sei_pl_pivotal_crm_accounts</td><td><span class="modebadge bt">BATCH</span></td><td>Data 360</td><td>outbound</td></tr>
         </tbody></table>
+
+        <div class="sec">Interdependence — co-occurrence (data points sharing a feed)</div>
+        <div style="font-size:12px;color:var(--sub);margin-bottom:8px">Data points that appear in the same feeds as account_number — they move together:</div>
+        <div class="chain">
+          <div class="gnode" style="border-left:3px solid var(--datapoint)"><div class="gm">THIS</div><div class="gp">account_number</div></div>
+          <span class="ar">co-occurs in Account feed →</span>
+          <div class="gnode"><div class="gp">account_display_name</div><div class="gd">PII</div></div>
+          <div class="gnode"><div class="gp">portfolio_id</div><div class="gd">ref</div></div>
+          <div class="gnode"><div class="gp">base_currency</div></div>
+        </div>
+
+        <div class="sec">Interdependence — impact (what depends on this data point)</div>
+        <div style="font-size:12px;color:var(--sub);margin-bottom:8px">If ACCOUNT_NUMBER changes, these are affected:</div>
+        <table><thead><tr><th>Affected</th><th>Type</th><th>Via</th></tr></thead><tbody>
+          <tr><td class="mono">Account feed, EOD Positions, Taxlot</td><td><span class="pill" style="background:var(--inbound)">3 feeds</span></td><td>contains field</td></tr>
+          <tr><td class="mono">Adhoc Income Loader</td><td><span class="pill" style="background:var(--outbound)">1 loader</span></td><td>attribute</td></tr>
+          <tr><td class="mono">account_retrieve (RT), sei_pl_pivotal_crm_accounts (batch)</td><td><span class="pill" style="background:var(--accent)">2 flows</span></td><td>consumes</td></tr>
+          <tr><td class="mono">sei_gld_accounts + 150 pipelines</td><td><span class="pill" style="background:var(--gold)">1 mart</span></td><td>key column</td></tr>
+        </tbody></table>
+        <div style="font-size:11px;color:var(--muted);margin-top:8px">This is migration impact analysis: change a SEI field → see every feed, loader, flow, and mart affected.</div>
       </div>
     </div>
   </div>
@@ -396,17 +548,60 @@
   <!-- ============ INTERFACE 360 ============ -->
   <div class="screen" id="s-interface">
     <div class="h1">Interface 360 — Legacy → SEI Migration Map</div>
-    <p class="lead">System-to-system interfaces from the inventory. AddVantage (legacy) is mapped to its SEI target
-      (feed / loader / API). Migration status flags what's being re-platformed.</p>
-    <div><span class="chip on">All</span><span class="chip">In Scope</span><span class="chip">Outbound</span><span class="chip">Migrating to SEI</span></div>
-    <table><thead><tr><th>Interface</th><th>Integration</th><th>Legacy</th><th>SEI Target</th><th>Routing</th><th>Dir</th><th>Sched</th><th>Status</th></tr></thead><tbody>
-      <tr class="click"><td><b>Pivotal CRM</b></td><td>Accounts</td><td><span class="pill" style="background:var(--nonsei)">AddVantage</span></td><td>sei_feed · <b>Client</b></td><td class="mono" style="font-size:11px">SEI SWP→Pivotal</td><td><span class="pill" style="background:var(--outbound)">OUT</span></td><td>EOD</td><td><span class="pill" style="background:var(--ok)">→ SEI</span></td></tr>
-      <tr class="click"><td><b>Pivotal CRM</b></td><td>Positions</td><td><span class="pill" style="background:var(--nonsei)">AddVantage</span></td><td>sei_feed · <b>Asset</b></td><td class="mono" style="font-size:11px">SEI SWP→Pivotal</td><td><span class="pill" style="background:var(--outbound)">OUT</span></td><td>EOD</td><td><span class="pill" style="background:var(--ok)">→ SEI</span></td></tr>
-      <tr class="click"><td><b>Pivotal CRM</b></td><td>Interested Parties</td><td><span class="pill" style="background:var(--nonsei)">AddVantage</span></td><td>sei_feed · <b>Client</b></td><td class="mono" style="font-size:11px">SEI SWP→Pivotal</td><td><span class="pill" style="background:var(--outbound)">OUT</span></td><td>EOD</td><td><span class="pill" style="background:var(--ok)">→ SEI</span></td></tr>
-      <tr class="click"><td><b>Pivotal CRM</b></td><td>Linked Accounts</td><td><span class="pill" style="background:var(--nonsei)">AddVantage</span></td><td>sei_feed · <b>Client</b></td><td class="mono" style="font-size:11px">SEI SWP→Pivotal</td><td><span class="pill" style="background:var(--outbound)">OUT</span></td><td>EOD</td><td><span class="pill" style="background:var(--ok)">→ SEI</span></td></tr>
-    </tbody></table>
+    <p class="lead">System-to-system interfaces. AddVantage (legacy) mapped to its SEI target. Toggle Table ⇄ Routing;
+      filter by source, target, feed type, scope.</p>
+
+    <div class="filterbar">
+      <label>Source</label>
+      <select onchange="ifaceFilter()"><option>All</option><option>SEI SWP</option><option>AddVantage</option></select>
+      <label>Target</label>
+      <select onchange="ifaceFilter()"><option>All</option><option>Pivotal CRM</option><option>PBDW</option><option>Client Portal</option></select>
+      <label>Feed Type</label>
+      <select onchange="ifaceFilter()"><option>All</option><option>Batch</option><option>Real-time</option><option>Direct</option></select>
+      <label>Scope</label>
+      <select onchange="ifaceFilter()"><option>All</option><option>In Scope</option><option>Out of Scope</option></select>
+      <label>Direction</label>
+      <select onchange="ifaceFilter()"><option>All</option><option>Inbound</option><option>Outbound</option></select>
+      <div class="viewtoggle">
+        <button class="on" onclick="ifaceView(this,'table')">Table</button>
+        <button onclick="ifaceView(this,'routing')">Routing</button>
+      </div>
+    </div>
+
+    <div class="pane on" id="iface-table">
+      <table><thead><tr><th>Interface</th><th>Integration</th><th>Legacy</th><th>SEI Target</th><th>Feed Routing</th><th>Type</th><th>Dir</th><th>Sched</th><th>Status</th></tr></thead><tbody>
+        <tr class="click"><td><b>Pivotal CRM</b></td><td>Accounts</td><td><span class="pill" style="background:var(--nonsei)">AddVantage</span></td><td>sei_feed · <b>Client</b></td><td class="mono" style="font-size:11px">SEI SWP→Pivotal</td><td><span class="pill" style="background:var(--batch)">Batch</span></td><td><span class="pill" style="background:var(--outbound)">OUT</span></td><td>EOD</td><td><span class="pill" style="background:var(--ok)">→ SEI</span></td></tr>
+        <tr class="click"><td><b>Pivotal CRM</b></td><td>Positions</td><td><span class="pill" style="background:var(--nonsei)">AddVantage</span></td><td>sei_feed · <b>Asset</b></td><td class="mono" style="font-size:11px">SEI SWP→Pivotal</td><td><span class="pill" style="background:var(--batch)">Batch</span></td><td><span class="pill" style="background:var(--outbound)">OUT</span></td><td>EOD</td><td><span class="pill" style="background:var(--ok)">→ SEI</span></td></tr>
+        <tr class="click"><td><b>Client Portal</b></td><td>Holdings</td><td><span class="pill" style="background:var(--nonsei)">AddVantage</span></td><td>sei_feed · <b>EOD Positions</b></td><td class="mono" style="font-size:11px">SEI→PBDW→Portal</td><td><span class="pill" style="background:var(--batch)">Batch</span></td><td><span class="pill" style="background:var(--outbound)">OUT</span></td><td>EOD</td><td><span class="pill" style="background:var(--ok)">→ SEI</span></td></tr>
+        <tr class="click"><td><b>Pivotal CRM</b></td><td>Interested Parties</td><td><span class="pill" style="background:var(--nonsei)">AddVantage</span></td><td>sei_feed · <b>Client</b></td><td class="mono" style="font-size:11px">SEI SWP→Pivotal</td><td><span class="pill" style="background:var(--batch)">Batch</span></td><td><span class="pill" style="background:var(--outbound)">OUT</span></td><td>EOD</td><td><span class="pill" style="background:var(--ok)">→ SEI</span></td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="pane" id="iface-routing">
+      <div class="sec">Simple route — Accounts → Pivotal CRM (default chain)</div>
+      <div class="hopchain" style="margin-bottom:18px">
+        <div class="hop sei"><div class="ht">SEI SWP</div><div class="hs">source · target platform</div></div>
+        <span class="hoparrow">→<span class="hl">Client feed · EOD</span></span>
+        <div class="hop target"><div class="ht">Pivotal CRM</div><div class="hs">target · 3rd party</div></div>
+      </div>
+      <div class="sec">Complex multi-hop — Client Portal Holdings (graph for multi-hop routing)</div>
+      <div class="hopchain">
+        <div class="hop sei"><div class="ht">SEI SWP</div><div class="hs">source</div></div>
+        <span class="hoparrow">→<span class="hl">EOD Positions</span></span>
+        <div class="hop"><div class="ht">PBDW</div><div class="hs">warehouse · gold mart</div></div>
+        <span class="hoparrow">→<span class="hl">holdings extract</span></span>
+        <div class="hop target"><div class="ht">Client Portal</div><div class="hs">target · in-house</div></div>
+      </div>
+      <div class="sec">Legacy (reference) — what this replaces</div>
+      <div class="hopchain">
+        <div class="hop legacy"><div class="ht">AddVantage</div><div class="hs">legacy · being retired</div></div>
+        <span class="hoparrow">→<span class="hl">AddV→Pivotal</span></span>
+        <div class="hop target"><div class="ht">Pivotal CRM</div><div class="hs">target</div></div>
+      </div>
+    </div>
+
     <div class="note" style="margin-top:16px"><h3>Migration gaps</h3>
-      <div class="ri"><span class="no">!</span> Interfaces whose AddVantage source has no matched SEI target appear here (from coverage: addvantage_interfaces_unmapped) — the work still to do.</div>
+      <div class="ri"><span class="no">!</span> Interfaces whose AddVantage source has no matched SEI target (coverage: addvantage_interfaces_unmapped) — work still to do.</div>
     </div>
   </div>
 
@@ -434,6 +629,19 @@
   }
   function ptab(btn,grp,id){btn.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('on'));btn.classList.add('on');document.querySelectorAll(`[id^="${grp}-"]`).forEach(p=>p.classList.remove('on'));document.getElementById(grp+'-'+id).classList.add('on');}
   function ltab(btn,id){btn.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('on'));btn.classList.add('on');document.querySelectorAll('.lpane').forEach(p=>p.classList.remove('on'));document.getElementById('l-'+id).classList.add('on');}
+
+  // project filter (global)
+  let proj='all';
+  function setProj(p,btn){proj=p;btn.parentElement.querySelectorAll('.pf').forEach(b=>b.classList.remove('on'));btn.classList.add('on');}
+
+  // interface 360 view toggle + filter (mock)
+  function ifaceView(btn,v){btn.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('on'));btn.classList.add('on');document.getElementById('iface-table').classList.toggle('on',v==='table');document.getElementById('iface-routing').classList.toggle('on',v==='routing');}
+  function ifaceFilter(){/* mock: filters would narrow the table/routing */}
+
+  // api flow builder toggle
+  function apiBuilder(show){document.getElementById('api-builder').style.display=show?'block':'none';document.getElementById('api-flowlist').style.display=show?'none':'flex';}
+  // data pipeline builder toggle
+  function dataBuilder(show){document.getElementById('data-builder').style.display=show?'block':'none';document.getElementById('data-pipelist').style.display=show?'none':'flex';}
 
   const MODMETA={api:['API 360','#159943'],data:['DATA 360','#0091bf'],datapoint:['DATAPOINT 360','#0f4775'],interface:['INTERFACE 360','#b8528a'],loader:['LOADERS','#7c3aed'],pii:['PII','#c1113a']};
   const INDEX=[
